@@ -105,6 +105,8 @@ nav:
       - RL Training: ai/rl_training.md
       - MCP Gateway: ai/mcp_gateway.md
       - NL Verification: ai/nl_verification.md
+      - Free-Tier LLM Backend (OmniRoute): ai/omniroute_setup.md
+      - Fincept vs. Quantcept: ai/fincept-vs-quantcept.md
   - Tutorials:
       - tutorials/index.md
       - First NIFTY50 Strategy: tutorials/first-nifty50-strategy.md

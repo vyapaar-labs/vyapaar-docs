@@ -16,6 +16,21 @@ most likely to be misunderstood.
 - **[NL Verification](nl_verification.md)** — describing a strategy in
   plain English, having Vyapaar implement it, and getting a
   plain-English critique.
+- **[Free-Tier LLM Backend (OmniRoute)](omniroute_setup.md)** — running
+  the local free-tier router that powers `vyapaar-agent-llm`.
+- **[Fincept vs. Quantcept](fincept-vs-quantcept.md)** — which external
+  product grounded which design decision.
+
+## Primary Research
+
+For the deep detail behind the free-tier backend, see the workspace plans:
+
+- `docs/future-work-bottoms-up-build-order.md` (workspace root) — the
+  bottoms-up build order and index into every per-repo `docs/plans/*.md`
+  from the Fincept/Quantcept gap-closing initiative.
+- `vyapaar-agent/docs/plans/0005-local-slm-model-selection-and-reliability-reference.md`
+  — model licensing, fine-tuning, quantization, and determinism behind the
+  deferred embedded-local-model phase.
 
 ## What the AI Layer Is For
 

@@ -1,6 +1,11 @@
 # 0002 — Documenting the Fincept/Quantcept Mapping and the Free-Tier LLM Backend
 
-> **Status**: Proposed — not yet implemented.
+> **Status**: **Implemented** (Layer 6 of `docs/future-work-bottoms-up-build-order.md`).
+> Terminology disambiguation page `docs/ai/fincept-vs-quantcept.md` (Fincept =
+> quantitative MCP toolset; Quantcept = chat UX) and OmniRoute setup guide
+> `docs/ai/omniroute_setup.md` (run OmniRoute locally, free-tier-only models,
+> `VYAPAAR_LLM_*` env wiring, `FreeTierPolicy` guardrail, `--ignored` workload
+> tests), both linked from `docs/ai/index.md` and the MkDocs nav.
 > **Target**: `vyapaar-docs`.
 > **Depends on reading**:
 > - `vyapaar-docs/docs/plans/0001-mcp-gateway-and-quantitative-toolset-reference.md`
@@ -49,9 +54,12 @@ not itself specify new doc structure beyond what `0001` already laid out.
 
 ## 3. Implementation Phases
 
-### Phase 1 (deferred)
-Write the OmniRoute setup guide once `vyapaar-agent/docs/plans/0004`'s Phase 2 actually ships.
-Until then, link the two source documents above —
-`docs/future-work-bottoms-up-build-order.md` (workspace root) and
-`vyapaar-agent/docs/plans/0005-local-slm-model-selection-and-reliability-reference.md` — from this
-repo's `docs/ai/` index so a reader can find the primary research.
+### Phase 1 (implemented)
+Both deferred items landed: the OmniRoute setup guide (`docs/ai/omniroute_setup.md`)
+once `vyapaar-agent/docs/plans/0004`'s Phase 2 shipped (OmniRoute-backed free-tier
+LLM backend implemented through Phase 3), and the Fincept/Quantcept terminology
+disambiguation (`docs/ai/fincept-vs-quantcept.md`, which has no gate). The two
+source documents — `docs/future-work-bottoms-up-build-order.md` (workspace root)
+and `vyapaar-agent/docs/plans/0005-local-slm-model-selection-and-reliability-reference.md` —
+are linked from this repo's `docs/ai/index.md` so a reader can find the primary
+research.
