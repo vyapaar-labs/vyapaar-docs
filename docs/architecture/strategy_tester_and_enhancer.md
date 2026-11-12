@@ -57,19 +57,26 @@ The backtesting engine executes against pure `vyapaar-core` types, guaranteeing 
   - All debited instantaneously via the `vyapaar-ledger-book` double-entry accounting engine.
 
 ```rust
-// Invoking a backtest run via vyapaar-runtime-backtest
+// vyapaar-runtime-backtest/src/engine.rs — the real configuration struct
 let config = BacktestConfig {
-    symbol: InstrumentId::nse_equity("RELIANCE"),
-    start_date: NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-    end_date: NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
-    initial_cash: Money::inr(1_000_000), // ₹10,00,000 initial capital
-    slippage_model: SlippageModel::OrderBookImpact { bps: 5 },
-    cost_model: CostModel::IndianStatutoryTax,
+    starting_cash: dec!(1_000_000.00),        // ₹10 Lakhs (default)
+    product_type: ProductType::Delivery,      // Delivery vs Intraday
+    l2_simulation: false,                     // enable L2 order-book depth matching
+    latency: Some(NetworkLatency::default()), // optional latency model
+    slippage: Some(SlippageModel::default()), // optional slippage model
+    adverse_fill: None,                       // adverse fill across depth tiers
+    mis_square_off: None,                     // MIS 15:20 square-off manager
+    warmup_bars: 252,                         // bars before intents become orders
+    iccl_margin_holdback_pct: dec!(0.20),     // ICCL T+1 margin holdback (SEBI)
 };
-
-let engine = BacktestEngine::new(config);
-let report = engine.run(&mut my_strategy).await?;
 ```
+
+The engine also supports L2 tick-based fills (`FillModel::L2` requires a tick
+source; a bars-only run is refused with `l2_requires_ticks`), sweep/parameter
+grids, and a warm-up window during which strategy intents are recorded but not
+executed. For the full run-level configuration (strategy manifest, data source,
+seed, `[risk]` limits) see [`BacktestRunConfig` in
+`vyapaar-runtime-config`](https://github.com/vyapaar-labs/vyapaar-runtime/blob/main/docs/design/code-config.md).
 
 ---
 
@@ -96,24 +103,24 @@ class TrendBreakout(Strategy):
 ```mermaid
 flowchart LR
     A["Strategy DNA (Parameter Ranges)"] --> B{"Enhancer Engine"}
-    B -->|Mode 1| C["Genetic Algorithm (GA)\n- Population: 100\n- Generations: 50\n- Tournament Selection"]
-    B -->|Mode 2| D["Bayesian TPE\n- Probabilistic search\n- Concentrates on high-yield regions"]
-    B -->|Mode 3| E["Walk-Forward Optimization\n- Anchored / Rolling Out-of-Sample\n- Curve-fit quarantine"]
+    B -->|Mode 1| C["Genetic Algorithm (GA)\n- Population: 50 (default)\n- Generations: 20 (default)\n- Crossover 0.8 / Mutation 0.2"]
+    B -->|Mode 2| D["Bayesian TPE\n- 10 initial random evals\n- gamma = 0.25 percentile split"]
+    B -->|Mode 3| E["Walk-Forward Optimization\n- Anchored / Rolling Out-of-Sample\n- WFE >= 0.60 certification"]
     
-    C --> F["Pareto Frontier Evaluation"]
+    C --> F["Fitness Frontier (weighted composite)"]
     D --> F
     E --> F
-    F --> G["Robust Strategy Artifact"]
+    F --> G["DSR / PBO Guardrails"]
+    G --> H["Robust Strategy Artifact"]
 ```
 
 #### 1. Genetic Algorithm (GA) Optimization
 * **Chromosome Representation**: An encoded vector of discrete parameter choices.
-* **Fitness Function**: Multi-objective fitness scoring balancing Sharpe Ratio, Sortino Ratio, Maximum Drawdown, and Profit Factor:
-  $$\text{Fitness} = \text{Sharpe} \times \log(1 + \text{ProfitFactor}) \times (1 - \text{MaxDrawdown})$$
-* **Tournament Selection & Elitism**: Preserves the top 5% of candidate performers while mutating child chromosomes with Gaussian jitter.
+* **Fitness Function**: A weighted composite of the four reported metrics — the default weights are `(0.5, 0.3, 0.15, 0.05)` over Sharpe, Sortino, Profit Factor, and (minimized) Maximum Drawdown; both the GA and the TPE optimizer share this ranking.
+* **Defaults & Elitism**: `GaConfig` defaults to a population of 50 over 20 generations with crossover rate 0.8 and mutation rate 0.2; elitism preserves the best individuals across generations.
 
 #### 2. Bayesian Optimization (TPE)
-Utilizes Tree-structured Parzen Estimators to construct a probabilistic model of parameter performance, prioritizing search regions with highest expected improvement.
+Utilizes Tree-structured Parzen Estimators to construct a probabilistic model of parameter performance, prioritizing search regions with highest expected improvement. The optimizer starts with **10 random evaluations**, then splits evaluated points at the **gamma = 0.25** percentile into "good" and "bad" latus, and samples new candidates from the good latus' density — reaching good regions with far fewer evaluations than grid or random search.
 
 #### 3. Walk-Forward Analysis (WFO)
 The ultimate defense against overfitting. The historical dataset is divided into alternating **In-Sample (Train)** and **Out-of-Sample (Test)** windows:
@@ -131,16 +138,17 @@ Following Marcos López de Prado's seminal research, running $N$ backtest trials
 $$\text{DSR} = P\left( \widehat{\text{SR}} > \text{SR}_0 \mid N, \gamma_3, \gamma_4, V \right)$$
 
 * Adjusts for the number of trials ($N$), return skewness ($\gamma_3$), kurtosis ($\gamma_4$), and variance of trial Sharpe ratios ($V$).
-* Any strategy with $\text{DSR} < 0.95$ is flagged as likely overfit and denied live deployment.
+* **Implemented gate** (`vyapaar-runtime-enhancer::overfitting_guardrails`): a strategy is considered robust when **DSR ≥ 3.0**; values **< 1.5** are flagged as likely overfitting. The combined guard requires `dsr >= 3.0 && pbo < 0.5` (these are the actual thresholds the engine enforces; earlier prose versions citing 0.95 were aspirational).
 
 ### 4.2 Probability of Backtest Overfitting (PBO)
-Using Combinatorially Symmetric Cross-Validation (CSCV), Vyapaar slices historical sub-periods, constructs thousands of out-of-sample combinations, and measures the probability that the in-sample optimal strategy underperforms the median out-of-sample. A strategy is accepted only when $\text{PBO} < 0.10$.
+Using Combinatorially Symmetric Cross-Validation (CSCV), Vyapaar slices historical sub-periods, constructs out-of-sample combinations, and measures the probability that the in-sample optimal strategy underperforms the median out-of-sample. **PBO ≥ 0.5** suggests likely overfitting and fails the guardrail.
 
 ### 4.3 Monte Carlo Permutation & Stress Testing
-Once candidate parameters are selected, Vyapaar's Monte Carlo engine simulates 10,000 alternative market histories:
-1. **Trade Sequence Permutation**: Shuffles the chronological order of executed trades without replacement to evaluate worst-case drawdown duration and risk of ruin.
-2. **Slippage & Spread Shock Injection**: Multiplies execution costs by $1.5\times$, $2.0\times$, and $3.0\times$ to determine strategy break-even fragility.
-3. **Synthetic Gap Testing**: Simulates opening gap-down events of 2% to 5% to verify stop-loss robustness.
+Once candidate parameters are selected, the Monte Carlo engine (`monte_carlo_stress`) evaluates alternative market histories — the simulation count (`n_simulations`) is caller-specified per run:
+1. **Trade Sequence Permutation**: Shuffles the chronological order of trade returns without replacement to evaluate worst-case drawdown and risk of ruin.
+2. **Slippage & Spread Shock Injection**: Multiplies execution costs by $1.5\times$, $2.0\times$, and $3.0\times$ (`ShockMagnitude`) to determine strategy break-even fragility.
+3. **Synthetic Gap Testing**: Prepends negative gap-down returns to verify stop-loss robustness.
+4. **Survival gate**: the strategy survives stress only if worst-case PnL stays above −50% of capital (`survives_stress`).
 
 ---
 
@@ -149,10 +157,11 @@ Once candidate parameters are selected, Vyapaar's Monte Carlo engine simulates 1
 Inspired by **StockSharp Odysseus (`StockSharp.Algo.Analytics / Odysseus`)**, Vyapaar incorporates automated genetic strategy synthesis and market regime analytics:
 
 ### 5.1 AST-Based Rule Tree Synthesis (Odysseus Port)
-Rather than tuning a fixed set of scalar numbers, Odysseus generates and evolves an **Abstract Syntax Tree (AST)** of trading logic:
-* **Condition Nodes**: Relational comparisons between indicators (from the 100+ StockSharp catalog), threshold crossings (e.g. `RSI < 30`), and boolean gates (`AND`, `OR`, `NOT`).
-* **Action Nodes**: Order placements (`PlaceBuyLimit`, `PlaceSellMarket`, `ClosePosition`, `TrailingStop`).
-* **Sizing Nodes**: Fixed notional, Kelly fraction, or ATR-volatility normalized lot sizing.
+Rather than tuning a fixed set of scalar numbers, Odysseus generates and evolves an **Abstract Syntax Tree (AST)** of trading logic (`vyapaar-runtime-enhancer::odysseus`, rayon-parallelized for up to 1,000 rule-tree genomes/second):
+* **Condition Nodes**: comparisons of a market signal (`mid_price`, `spread`, `bid_depth`, `ask_depth`, …) against a threshold.
+* **Action Nodes**: order sides (buy / sell / hold) submitted against L2 order-book depth.
+* **Composite Nodes**: boolean `AND` / `OR` / `NOT` over child conditions.
+* **Fitness**: Sharpe, max drawdown, trade count, and related metrics are computed per genome under parallel evaluation.
 
 ```mermaid
 graph TD
@@ -170,8 +179,7 @@ graph TD
 * **Multi-Objective Pareto Selection**: Selects candidates that dominate the multi-dimensional frontier across Sharpe, Sortino, Profit Factor, and Max Drawdown.
 
 ### 5.3 Market Regime Clustering (StockSharp Analytics)
-* Integrates Hidden Markov Models (HMM) and KMeans clustering to classify market states into `TrendingBull`, `TrendingBear`, `HighVolatilityChop`, and `LowVolatilityMeanReverting`.
-* Dynamically activates regime-appropriate strategy subtrees.
+Regime detection lives in `vyapaar-agent` (not the runtime enhancer): `vyapaar-agent-genetic` classifies market states (`DetectedRegime`, including high-volatility states) and the research loop tags hypotheses with the regime at entry, the dominant regime, and the failure regime, so failed strategies are diagnosed per market state.
 
 ---
 
@@ -210,3 +218,11 @@ Beyond numerical hyperparameter tuning, Vyapaar's AI Engine (`vyapaar-agent`) pr
 ```
 
 This delivers a true automated quant assistant that does not merely fiddle with knobs, but logically refines trading hypotheses within strict mathematical guardrails.
+
+> **Scaffolding note**: the closed-loop integration lives in
+> `vyapaar-runtime-enhancer::ai_refinement` — `StrategyDiagnostic` (Sharpe,
+> Sortino, max drawdown, win/loss counts, fees, profit factor) and the loop
+> types feeding the mutated-spec re-evaluation. The LLM-side wiring (prompting,
+> MCP, hypothesis journal) is `vyapaar-agent`'s research loop; the runtime
+> enhancer provides the diagnostics and re-evaluation boundary, and the
+> end-to-end loop is not yet fully wired.

@@ -55,7 +55,14 @@ nav:
   - Architecture:
       - architecture/index.md
       - Overview: architecture/overview.md
+      - Architecture Layers & Topology: architecture/architecture_layers.md
+      - Ledger Performance (Trade Journal): architecture/ledger_performance.md
+      - Ledger Allocation (Portfolio Optimization): architecture/ledger_allocation.md
+      - Runtime Job Scheduler: architecture/runtime_jobs.md
+      - Runtime Overview (vyapaar-runtime): architecture/runtime_overview.md
+      - Runtime Chat Agent: architecture/runtime_chat.md
       - System Design & Bounded Contexts: design/architecture.md
+      - DDD Conflicts & Resolutions: architecture/ddd_conflicts_resolutions.md
       - Crate Hierarchy: architecture/crate_hierarchy.md
       - Message Flow: architecture/message_flow.md
       - Domain-Driven Design (DDD): architecture/domain_driven_design.md
