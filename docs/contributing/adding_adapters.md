@@ -1,801 +1,265 @@
 # Adding Broker Adapters
 
-Adapter development happens in the `vyapaar-adapters` repository, not in
-the core `vyapaar` repository. This document describes how to add a new
-adapter, test it, and publish it.
+Adapter development happens in the `vyapaar-adapters` repository. This document
+describes how to add a new broker **module** to the package, test it offline, and
+register it.
+
+> Synced against `vyapaar-adapters` source on 2026-11-12. The seven shipped modules
+> (`dhan`, `zerodha`, `angelone`, `upstox`, `fyers`, `kotak`, `iifl`) are the living
+> examples — `dhan.py` is the cleanest template, `zerodha.py` the reference for real
+> candle history.
 
 ## Before You Start
 
-Adding an adapter is a substantial piece of work — typically 2–5 days
-for a broker you have never integrated before. Before starting:
+1. Read [Adapters Package](../api/adapters-package.md) for the package model and
+   [Adapter Interface](../architecture/adapter_interface.md) for how Python adapters
+   relate to the Rust production path (`vyapaar-market` / `vyapaar-exec`).
+2. Check the parity state in the repo's `docs/gaps/` index — `dhan` and `zerodha`
+   are contract-certified; the other five are implemented but untested (gap 0001).
+   New broker modules should land **with** their contract test, never without.
+3. Get API access from the broker. Most Indian brokers require registration and a
+   static IP for order placement — see
+   [Brokers](../india/brokers.md#the-static-ip-requirement).
 
-1. Check whether the broker is already supported. Dhan and Zerodha are
-   implemented and contract-certified. Angel One, Fyers, Upstox, Kotak,
-   IIFL, and Motilal Oswal exist only as package scaffolds (the uniform
-   layout, no implementation, no entry point), so they are open for you to
-   build.
-2. Read [Adapter Interface](../architecture/adapter_interface.md).
-3. Get API access from the broker. Most Indian brokers require
-   registration and a static IP for order placement.
+## The Module Pattern
 
-## The Uniform Structure
+Adapters are single modules of the one package — there is no per-broker
+distribution, no scaffolding generator:
 
-Every adapter in `vyapaar-adapters/` follows the same file layout. This
-is not a stylistic preference — it means a developer familiar with one
-adapter can read any other.
+```text
+vyapaar-adapters/
+├── vyapaar_adapters/
+│   ├── <broker>.py          # the adapter module you are adding
+│   ├── common/              # shared: models, parse, protocols, transport, base, config, codec, fixtures
+│   ├── paper.py             # offline harness
+│   └── registry.py          # BROKER_ADAPTERS + entry-point discovery
+├── tests/
+│   └── test_<broker>.py     # contract test (required in the same change)
+├── configs/
+│   └── <broker>.toml        # connection template
+└── pyproject.toml           # entry-point registration
+```
 
-    vyapaar-<broker>/
-    ├── pyproject.toml
-    ├── README.md
-    ├── src/
-    │   └── vyapaar_<broker>/
-    │       ├── __init__.py
-    │       ├── config.py           # Pydantic config model
-    │       ├── data.py             # MarketDataAdapter methods
-    │       ├── execution.py        # ExecutionAdapter methods
-    │       ├── instruments.py      # InstrumentProvider
-    │       ├── websocket.py        # WebSocket connection
-    │       ├── http.py             # REST client wrapper
-    │       ├── parsing.py          # JSON → Vyapaar types
-    │       └── constants.py        # Endpoints, error codes
-    └── tests/
-        ├── conftest.py
-        ├── fixtures/
-        │   ├── instruments.json
-        │   ├── quotes.json
-        │   ├── orders.json
-        │   └── ...
-        ├── test_config.py
-        ├── test_data.py
-        ├── test_execution.py
-        └── test_parsing.py
+## Step 1: Subclass `BaseRestAdapter`
 
-## Step 1: Create the Package Skeleton
+```python
+"""MyBroker REST adapter."""
 
-    cd vyapaar-adapters
-    cp -r dhan/ mybroker/       # Copy an existing adapter as a template
-    cd mybroker
+from __future__ import annotations
 
-    # Rename the package directory
-    mv src/vyapaar_dhan src/vyapaar_mybroker
+from decimal import Decimal
 
-    # Rename the module references
-    grep -rl "vyapaar_dhan\|vyapaar-dhan\|Dhan" . | xargs sed -i 's/vyapaar_dhan/vyapaar_mybroker/g; s/vyapaar-dhan/vyapaar-mybroker/g; s/Dhan/MyBroker/g'
-
-The Dhan adapter is the recommended template because it has the
-cleanest structure. The Zerodha adapter is a good second reference
-for brokers with a daily-refresh OAuth flow.
-
-## Step 2: Define the Configuration Model
-
-`config.py`:
-
-    from pydantic import BaseModel, Field, SecretStr
+from vyapaar_adapters.common.base import BaseRestAdapter
+from vyapaar_adapters.common.models import (
+    Margin, Order, OrderRequest, OrderSide, OrderStatus, OrderType, Position, Quote,
+)
+from vyapaar_adapters.common.parse import as_decimal
 
 
-    class MyBrokerConfig(BaseModel):
-        client_id: str = Field(..., description="API client ID")
-        access_token: SecretStr = Field(..., description="Access token")
-        base_url: str = "https://api.mybroker.com"
-        ws_url: str = "wss://ws.mybroker.com"
+class MyBrokerAdapter(BaseRestAdapter):
+    """REST adapter for the MyBroker API."""
 
-        # Connection tuning
-        reconnect_attempts: int = 5
-        reconnect_backoff_seconds: float = 2.0
-        heartbeat_seconds: int = 30
+    default_base_url = "https://api.mybroker.com"
 
-        # Rate limits
-        rate_limit_per_second: int = 10
-        order_rate_limit_per_second: int = 3
+    def _headers(self) -> dict[str, str]:
+        headers = super()._headers()
+        if self.credentials.access_token:
+            headers["Authorization"] = f"Bearer {self.credentials.access_token}"
+        return headers
+```
 
-        class Config:
-            extra = "forbid"
+`BaseRestAdapter` gives you `_get`/`_post`/`_delete` (returning the decoded JSON
+body) and `_raise_for_status` (raising `BrokerApiError(status, detail)` on HTTP
+≥ 400). `transport`, `base_url`, and `credentials` are constructor-injected —
+never read the environment inside an adapter.
 
-The `SecretStr` type prevents the token from appearing in logs.
+## Step 2: Translate wire → canonical
 
-Follow the environment convention the implemented adapters use: credentials
-come from `<PREFIX>*` variables through a `from_env(prefix=...)` classmethod,
-`<PREFIX>MODE` selects `live` (default) or `paper`, building the adapter
-without credentials raises `AuthenticationError` rather than silently using
-paper, and the cache lives under `$VYAPAAR_CACHE_DIR/<broker>`. The helpers
-`cache_dir`, `env_mode` and `missing_credentials_error` in
-`vyapaar_adapters_shared.env` implement this.
+Implement the `Adapter` protocol methods. Two invariants carry the weight:
 
-## Step 3: Implement the REST Client
+**Canonical instrument format.** Instruments arrive as
+`<EXCHANGE>:<SYMBOL>` (e.g. `NSE:RELIANCE-EQ`, `NFO:NIFTY24DEC24000CE`). Split and
+map to broker identifiers inside the module:
 
-`http.py`:
+```python
+@staticmethod
+def _split_instrument(instrument: str) -> tuple[str, str]:
+    if ":" not in instrument:
+        raise ValueError(f"instrument must be <EXCHANGE>:<SYMBOL>, got {instrument!r}")
+    exchange, symbol = instrument.split(":", maxsplit=1)
+    return exchange.upper(), symbol
+```
 
-    import httpx
-    from tenacity import retry, stop_after_attempt, wait_exponential
+**Exact decimals everywhere.** Coerce wire values through `as_decimal` — it accepts
+`Decimal`/`int`/`str` and raises `TypeError` on `float`. Serialize outbound values
+as strings (`str(request.quantity)`) so no precision is lost in JSON. Never parse a
+financial value with `float(...)`.
 
-    from .config import MyBrokerConfig
-
-
-    class MyBrokerHTTP:
-        def __init__(self, config: MyBrokerConfig):
-            self.config = config
-            self.client = httpx.AsyncClient(
-                base_url=config.base_url,
-                timeout=10.0,
-                headers={"Authorization": f"Bearer {config.access_token.get_secret_value()}"},
-            )
-
-        async def authenticate(self) -> None:
-            resp = await self.client.post("/auth/verify")
-            resp.raise_for_status()
-
-        @retry(
-            stop=stop_after_attempt(3),
-            wait=wait_exponential(multiplier=1, min=1, max=10),
-        )
-        async def get(self, path: str, **params) -> dict:
-            resp = await self.client.get(path, params=params)
-            resp.raise_for_status()
-            return resp.json()
-
-        async def post(self, path: str, json: dict) -> dict:
-            resp = await self.client.post(path, json=json)
-            resp.raise_for_status()
-            return resp.json()
-
-        async def close(self) -> None:
-            await self.client.aclose()
-
-Retry logic belongs here, not in the client implementation. A 5xx
-response is retried; a 4xx response is raised immediately.
-
-## Step 4: Implement the WebSocket Client
-
-`websocket.py`:
-
-    import asyncio
-    import json
-    import logging
-    from typing import Callable
-
-    import websockets
-
-    from .config import MyBrokerConfig
-
-    log = logging.getLogger(__name__)
-
-
-    class MyBrokerWebSocket:
-        def __init__(self, config: MyBrokerConfig):
-            self.config = config
-            self.ws = None
-            self._handlers: dict[str, Callable[[dict], None]] = {}
-            self._running = False
-
-        async def connect(self) -> None:
-            self.ws = await websockets.connect(self.config.ws_url)
-            self._running = True
-            asyncio.create_task(self._receive_loop())
-
-        async def _receive_loop(self) -> None:
-            while self._running:
-                try:
-                    raw = await self.ws.recv()
-                    message = json.loads(raw)
-                    self._dispatch(message)
-                except websockets.ConnectionClosed:
-                    log.warning("WebSocket closed, reconnecting")
-                    await self._reconnect()
-                except Exception:
-                    log.exception("Error in receive loop")
-
-        def _dispatch(self, message: dict) -> None:
-            msg_type = message.get("type")
-            handler = self._handlers.get(msg_type)
-            if handler:
-                handler(message)
-
-        def on(self, msg_type: str, handler: Callable[[dict], None]) -> None:
-            self._handlers[msg_type] = handler
-
-        async def subscribe(self, symbols: list[str]) -> None:
-            await self.ws.send(json.dumps({
-                "action": "subscribe",
-                "symbols": symbols,
-            }))
-
-        async def _reconnect(self) -> None:
-            for attempt in range(self.config.reconnect_attempts):
-                try:
-                    await asyncio.sleep(self.config.reconnect_backoff_seconds * (2 ** attempt))
-                    await self.connect()
-                    return
-                except Exception:
-                    continue
-            log.error("Failed to reconnect after %d attempts", self.config.reconnect_attempts)
-
-        async def close(self) -> None:
-            self._running = False
-            if self.ws:
-                await self.ws.close()
-
-The reconnect loop is mandatory. Indian broker WebSockets drop
-regularly; an adapter without reconnection logic is unusable for live
-trading.
-
-## Step 5: Implement the Market Data Methods
-
-`data.py`. The role is a `runtime_checkable` Protocol, so this class
-implements it structurally — it inherits nothing but the shared base:
-
-    from datetime import datetime
-
-    from vyapaar.adapters.capabilities import Capability
-    from vyapaar.adapters.errors import AdapterError
-    from vyapaar.adapters.models import (
-        MarketDepth,
-        StreamCallback,
-        StreamMode,
-        Subscription,
+```python
+def get_quote(self, instrument: str) -> Quote:
+    _, symbol = self._split_instrument(instrument)
+    body = self._get("/quotes", params={"symbol": symbol})
+    return Quote(
+        instrument=instrument,
+        last_price=as_decimal(body["ltp"]),
+        open=as_decimal(body["open"]) if "open" in body else None,
     )
-    from vyapaar.domain.bar import Bar
-    from vyapaar.domain.instrument import Instrument, InstrumentId
-    from vyapaar.domain.tick import QuoteTick
-
-    from .http import MyBrokerHTTP
-    from .websocket import MyBrokerWebSocket
-    from .parsing import (
-        parse_instrument,
-        parse_quote,
-        parse_depth,
-        parse_bars,
-        to_broker_interval,
-    )
-
-
-    class MyBrokerMarketData:
-        """The MarketDataAdapter half of the adapter."""
-
-        def __init__(self, http: MyBrokerHTTP, ws: MyBrokerWebSocket):
-            self.http = http
-            self.ws = ws
-            self._subscriptions: set[str] = set()
-
-        async def instruments(self) -> list[Instrument]:
-            self.require_connected()
-            self.require_capabilities(Capability.INSTRUMENT_MASTER)
-            data = await self.http.get("/instruments")
-            return [parse_instrument(row) for row in data["instruments"]]
-
-        async def search_instruments(self, query: str) -> list[Instrument]:
-            self.require_connected()
-            needle = query.lower()
-            return [
-                instrument
-                for instrument in await self.instruments()
-                if needle in instrument.instrument_id.symbol.lower()
-            ]
-
-        async def quote(self, instrument_id: InstrumentId) -> QuoteTick:
-            self.require_connected()
-            self.require_capabilities(Capability.QUOTES)
-            data = await self.http.get(f"/quote/{instrument_id.symbol}")
-            return parse_quote(data, instrument_id)
-
-        async def depth(self, instrument_id: InstrumentId, levels: int = 5) -> MarketDepth:
-            self.require_connected()
-            self.require_capabilities(Capability.DEPTH)
-            data = await self.http.get(f"/depth/{instrument_id.symbol}", levels=levels)
-            return parse_depth(data, instrument_id)
-
-        async def historical_bars(
-            self,
-            instrument_id: InstrumentId,
-            *,
-            timeframe: str,
-            start: datetime,
-            end: datetime,
-        ) -> list[Bar]:
-            self.require_connected()
-            self.require_capabilities(Capability.HISTORICAL_BARS)
-            data = await self.http.get(
-                "/historical",
-                symbol=instrument_id.symbol,
-                interval=to_broker_interval(timeframe),
-                from_ts=start.timestamp(),
-                to_ts=end.timestamp(),
-            )
-            return parse_bars(data, instrument_id, timeframe)
-
-        async def subscribe(
-            self,
-            instruments: tuple[InstrumentId, ...],
-            *,
-            mode: StreamMode,
-            callback: StreamCallback,
-        ) -> Subscription:
-            self.require_connected()
-            # subscribe needs no Capability: the mode is the argument, so it
-            # is checked against stream_modes instead.
-            self.capabilities().require_stream_mode(mode)
-            handle = await self.ws.subscribe(
-                tuple(instruments), mode, callback
-            )
-            self._subscriptions.add(handle)
-            return Subscription(
-                id=handle, instruments=tuple(instruments), mode=mode
-            )
-
-        async def unsubscribe(self, subscription_id: str) -> None:
-            self.require_connected()
-            if subscription_id not in self._subscriptions:
-                raise AdapterError(
-                    f"unknown subscription {subscription_id!r}"
-                )
-            self._subscriptions.discard(subscription_id)
-            await self.ws.unsubscribe(subscription_id)
-
-`timeframe` is the canonical aggregation name (`"1m"`, `"1d"`); translate it
-to the broker's code in `parsing.py` or `constants.py`, never in the engine.
-An unknown instrument id is an `AdapterError`, not a `KeyError`.
-
-## Step 6: Implement the Execution Methods
-
-`execution.py`, against the `ExecutionAdapter` Protocol:
-
-    from vyapaar.adapters.capabilities import Capability
-    from vyapaar.adapters.errors import AdapterError
-    from vyapaar.adapters.models import (
-        Funds,
-        Holding,
-        MarginReport,
-        OrderReport,
-        Product,
-    )
-    from vyapaar.domain.instrument import InstrumentId
-    from vyapaar.domain.order import OrderIntent
-    from vyapaar.domain.position import Position
-    from vyapaar.domain.trade import Trade
-
-    from .http import MyBrokerHTTP
-    from .parsing import (
-        parse_order_report,
-        parse_position,
-        parse_holding,
-        parse_trade,
-        parse_funds,
-        parse_margin,
-        to_broker_product,
-    )
-
-
-    class MyBrokerExecution:
-        """The ExecutionAdapter half of the adapter."""
-
-        def __init__(self, http: MyBrokerHTTP):
-            self.http = http
-
-        async def place_order(
-            self,
-            intent: OrderIntent,
-            *,
-            product: Product,
-            client_order_id: str | None = None,
-        ) -> OrderReport:
-            self.require_connected()
-            self.require_capabilities(Capability.PLACE_ORDER)
-            # Refuse what we cannot express before spending a request.
-            caps = self.capabilities()
-            caps.require_product(product)
-            caps.require_order_type(intent.order_type)
-            caps.require_time_in_force(intent.time_in_force)
-            payload = {
-                "symbol": intent.instrument_id.symbol,
-                "side": intent.side.value.upper(),
-                "quantity": intent.quantity,
-                "order_type": intent.order_type.value.upper(),
-                "price": intent.price,
-                "client_order_id": client_order_id,
-            }
-            resp = await self.http.post("/orders", json=payload)
-            # parse_order_report maps the broker's rejection code onto
-            # status=REJECTED with a reject_reason, so a refusal is data here,
-            # not an exception.
-            return parse_order_report(resp, client_order_id=client_order_id)
-
-        async def modify_order(
-            self,
-            order_id: str,
-            *,
-            quantity: float | None = None,
-            price: float | None = None,
-            trigger_price: float | None = None,
-        ) -> None:
-            self.require_connected()
-            self.require_capabilities(Capability.MODIFY_ORDER)
-            if quantity is None and price is None and trigger_price is None:
-                raise AdapterError("modify_order() needs a field to change")
-            await self.http.post(f"/orders/{order_id}/modify", json={
-                "quantity": quantity,
-                "price": price,
-                "trigger_price": trigger_price,
-            })
-
-        async def cancel_order(self, order_id: str) -> None:
-            self.require_connected()
-            self.require_capabilities(Capability.CANCEL_ORDER)
-            await self.http.post(f"/orders/{order_id}/cancel", json={})
-
-        async def cancel_all(
-            self,
-            *,
-            instrument_id: InstrumentId | None = None,
-            product: Product | None = None,
-        ) -> None:
-            self.require_connected()
-            self.require_capabilities(Capability.CANCEL_ALL)
-            await self.http.post("/orders/cancel-all", json={
-                "symbol": instrument_id.symbol if instrument_id else None,
-                "product": to_broker_product(product) if product else None,
-            })
-
-        async def order_status(self, order_id: str) -> OrderReport:
-            self.require_connected()
-            self.require_capabilities(Capability.ORDER_BOOK)
-            resp = await self.http.get(f"/orders/{order_id}")
-            return parse_order_report(resp)
-
-        async def orders(self) -> list[OrderReport]:
-            self.require_connected()
-            self.require_capabilities(Capability.ORDER_BOOK)
-            resp = await self.http.get("/orders")
-            return [parse_order_report(o) for o in resp["orders"]]
-
-        async def trades(self) -> list[Trade]:
-            self.require_connected()
-            self.require_capabilities(Capability.TRADE_BOOK)
-            resp = await self.http.get("/trades")
-            return [parse_trade(t) for t in resp["trades"]]
-
-        async def positions(self) -> list[Position]:
-            self.require_connected()
-            self.require_capabilities(Capability.POSITIONS)
-            resp = await self.http.get("/positions")
-            return [parse_position(p) for p in resp["positions"]]
-
-        async def holdings(self) -> list[Holding]:
-            self.require_connected()
-            self.require_capabilities(Capability.HOLDINGS)
-            resp = await self.http.get("/holdings")
-            return [parse_holding(h) for h in resp["holdings"]]
-
-        async def funds(self) -> Funds:
-            self.require_connected()
-            self.require_capabilities(Capability.FUNDS)
-            return parse_funds(await self.http.get("/funds"))
-
-        async def margin(
-            self, instrument_id: InstrumentId | None = None
-        ) -> MarginReport:
-            self.require_connected()
-            self.require_capabilities(Capability.MARGIN)
-            resp = await self.http.get(
-                "/margin", symbol=instrument_id.symbol if instrument_id else None
-            )
-            return parse_margin(resp, instrument_id)
-
-Two rules carry most of the weight here:
-
-- **Unsupported is an exception.** A capability, product, order type or time
-  in force the adapter does not declare raises `CapabilityError` before the
-  request is sent. That is a configuration bug, so it must be loud.
-- **Refusal is not an exception.** When the *broker* refuses an order, return
-  an `OrderReport` with `status=REJECTED` and a `reject_reason`. The engine
-  journals and reconciles that; raising would lose the refusal.
-
-`client_order_id` is the caller's idempotency key — store it and return the
-same order for a repeat instead of creating a second one.
-
-Compose the two halves with the facade in `__init__.py`, and the single
-object satisfies all three declarations:
-
-    from vyapaar.adapters.base import Adapter
-    from vyapaar.adapters.capabilities import AdapterCapabilities, Capability
-    from vyapaar.adapters.models import RunMode, SessionInfo
-
-    from .config import MyBrokerConfig
-    from .http import MyBrokerHTTP
-    from .websocket import MyBrokerWebSocket
-    from .data import MyBrokerMarketData
-    from .execution import MyBrokerExecution
-
-
-    class MyBrokerAdapter(Adapter, MyBrokerMarketData, MyBrokerExecution):
-        name = "mybroker"
-
-        def __init__(self, config: MyBrokerConfig):
-            self.config = config
-            self.http = MyBrokerHTTP(config)
-            self.ws = MyBrokerWebSocket(config)
-            MyBrokerMarketData.__init__(self, self.http, self.ws)
-            MyBrokerExecution.__init__(self, self.http)
-            self._connected = False
-            self._caps = AdapterCapabilities(
-                name="mybroker",
-                exchanges=frozenset({"NSE"}),
-                features=frozenset({Capability.QUOTES, Capability.ORDER_BOOK}),
-            )
-
-        def capabilities(self) -> AdapterCapabilities:
-            return self._caps
-
-        async def connect(self) -> SessionInfo:
-            await self.http.authenticate()
-            await self.ws.connect()
-            self._connected = True
-            return SessionInfo(user_id=self.config.client_id, mode=RunMode.LIVE)
-
-        async def disconnect(self) -> None:
-            await self.ws.close()
-            await self.http.close()
-            self._connected = False
-
-        def is_connected(self) -> bool:
-            return self._connected
-
-        async def session(self) -> SessionInfo:
-            self.require_connected()
-            return SessionInfo(user_id=self.config.client_id, mode=RunMode.LIVE)
-
-The two roles are Protocols, so there is nothing to register or inherit for
-them: `isinstance(MyBrokerAdapter(config), MarketDataAdapter)` and
-`isinstance(..., ExecutionAdapter)` are simply `True` because the methods
-exist.
-
-## Step 7: Parsing
-
-`parsing.py` is where broker-specific JSON becomes the canonical types from
-`vyapaar.adapters.models` and `vyapaar.domain`. This is where most bugs live, so
-keep it small and test it thoroughly:
-
-    from vyapaar.domain.bar import Bar
-    from vyapaar.domain.instrument import Instrument, InstrumentId
-    from vyapaar.domain.tick import QuoteTick
-
-    from .constants import MILLIS_TO_NANOS
-    from .errors import ParseError
-
-
-    def parse_quote(raw: dict, instrument_id: InstrumentId) -> QuoteTick:
-        return QuoteTick(
-            instrument_id=instrument_id,
-            ts=raw["timestamp_ms"] * MILLIS_TO_NANOS,
-            bid_price=float(raw["bid"]),
-            ask_price=float(raw["ask"]),
-            bid_size=float(raw.get("bid_qty", 0.0)),
-            ask_size=float(raw.get("ask_qty", 0.0)),
-        )
-
-
-    def parse_bars(
-        raw: list[dict], instrument_id: InstrumentId, timeframe: str
-    ) -> list[Bar]:
-        return [
-            Bar(
-                instrument_id=instrument_id,
-                ts=row["timestamp_ms"] * MILLIS_TO_NANOS,
-                open=float(row["open"]),
-                high=float(row["high"]),
-                low=float(row["low"]),
-                close=float(row["close"]),
-                volume=float(row["volume"]),
-            )
-            for row in raw
-        ]
-
-Three rules for parsing code:
-
-1. **Emit the canonical types exactly.** Prices and quantities are `float`
-   and timestamps are unix nanoseconds, because that is what the domain uses;
-   the money-representation decision is tracked in the core. Field names
-   must match (`bid_price`, not `bid`; `instrument_id`, not `instrument`).
-2. **Always validate.** If a required field is missing, raise a descriptive
-   error, do not return a partially-populated object.
-3. **Always test.** Every parsing function gets a test with a real broker
-   fixture.
-
-## Step 8: Tests
-
-`tests/test_parsing.py`:
-
-    import pytest
-
-    from vyapaar.domain.instrument import InstrumentId
-    from vyapaar_mybroker.errors import ParseError
-    from vyapaar_mybroker.parsing import parse_quote
-
-    from vyapaar_adapters_shared.fixtures import load_fixture
-
-
-    def test_parse_quote():
-        raw = load_fixture("quote_reliance.json")
-        quote = parse_quote(raw, InstrumentId("RELIANCE", "NSE"))
-        assert quote.instrument_id.symbol == "RELIANCE"
-        assert quote.bid_price == 2450.50
-        assert quote.ask_price == 2450.75
-
-
-    def test_parse_quote_missing_bid_raises():
-        raw = load_fixture("quote_missing_bid.json")
-        with pytest.raises(ParseError):
-            parse_quote(raw, InstrumentId("RELIANCE", "NSE"))
-
-The fixtures directory contains recorded broker responses. Save them
-from your own API calls or from the broker's documentation examples.
-
-Then run the shared contract suite, which is the check that actually makes
-the adapter an adapter:
-
-    from vyapaar.adapters.contract import verify_adapter_contract
-
-    from vyapaar_mybroker import MyBrokerAdapter
-    from vyapaar_mybroker.config import MyBrokerConfig
-
-
-    @pytest.mark.asyncio
-    async def test_mybroker_satisfies_the_contract():
-        await verify_adapter_contract(MyBrokerAdapter(MyBrokerConfig.paper()))
-
-It is deterministic and pytest-free (it raises `ContractViolation` on the
-first broken rule), and it leaves the adapter disconnected when it finishes.
-
-Certification in the `vyapaar-adapters` repository is auto-discovered: the root
-`tests/test_contract_suite.py` runs the suite over every package that has
-`tests/fixtures/<name>/routes.toml`, so adding that file is enough and the
-test file needs no edit. `routes.toml` names the `adapter`, `config` (which
-must provide `.paper()`) and `fallback` (the in-memory order handler) hooks as
-`module:attr` strings, and maps URL path fragments to recorded fixture files
-under `[routes]`. Packages without a `routes.toml` are reported as skipped
-placeholders.
-The contract suite deliberately leaves stream delivery, reconnect and
-data-gap markers to their own story, so cover those in the adapter's tests.
-
-## Step 9: Registration
-
-The registry lives in the core, in `vyapaar.adapters.registry`. An installed
-package advertises itself through the `vyapaar.adapters` entry-point group in
-its own `pyproject.toml`:
-
-    [project.entry-points."vyapaar.adapters"]
-    mybroker = "vyapaar_mybroker:MyBrokerAdapter"
-
-Discovery is lazy, so importing `vyapaar` never touches installed
-distributions, and explicit registration always wins — a config file or a
-test can override an installed adapter without uninstalling it. For a local
-run without an install, register the factory directly:
-
-    from vyapaar.adapters.registry import register_adapter
-
-    from vyapaar_mybroker import MyBrokerAdapter
-
-    register_adapter("mybroker", MyBrokerAdapter)
-
-Also add the adapter to the CI workflow in `.github/workflows/ci.yml`
-so its tests run:
-
-    - run: pip install -e ./mybroker
-    - run: pytest mybroker/
-
-## Step 10: Documentation
-
-Create `mybroker/README.md` with:
-
-- Installation: `pip install -e ./mybroker`
-- Configuration: required credentials and optional settings
-- Authentication flow: how tokens are obtained and refreshed
-- Known limitations: what the adapter does not support
-- Example: a minimal script that connects, subscribes, and places an
-  order
-
-The README is the primary documentation users see. It should be
-complete enough that someone can use the adapter without reading the
-source.
-
-## Testing Against a Live Broker
-
-Live tests are gated by environment variables. In `conftest.py`:
-
-    import os
-    import pytest
-
-
-    @pytest.fixture
-    def live_credentials():
-        client_id = os.environ.get("MYBROKER_CLIENT_ID")
-        access_token = os.environ.get("MYBROKER_ACCESS_TOKEN")
-        if not client_id or not access_token:
-            pytest.skip("Live credentials not configured")
-        return MyBrokerConfig(client_id=client_id, access_token=access_token)
-
-Tests that need live credentials are marked `@pytest.mark.live` and
-skipped by default. CI does not run them.
-
-## Publishing
-
-Once the adapter passes its tests and has been used for a week of
-paper trading without issues:
-
-1. Bump the version in `pyproject.toml`.
-2. Update the adapter list in `vyapaar-adapters/README.md`.
-3. Open a pull request. The adapter repository maintains its own
-   release cycle and does not depend on the core.
+```
+
+Enum mappings are plain dicts keyed by the canonical enum, so an unmapped member
+fails loudly with `KeyError` instead of silently sending the wrong value:
+
+```python
+order_type = {
+    OrderType.LIMIT: "LMT",
+    OrderType.MARKET: "MKT",
+    OrderType.STOP_LIMIT: "SL",
+    OrderType.STOP_MARKET: "SLM",
+}[request.order_type]
+```
+
+Per-method expectations (matching the shipped modules):
+
+- `place_order(request) -> Order` — POST the mapped payload; read the broker's
+  order id from the response and return a canonical `Order` (typically
+  `status=OrderStatus.PENDING`, `filled_quantity=Decimal(0)`). A missing order id
+  is `raise ValueError(f"order submission failed: {body!r}")` — never fabricate one.
+- `get_positions() -> list[Position]` — map net quantities (Dhan, for example,
+  computes `buyQty - sellQty` so long is positive).
+- `get_margin() -> Margin` — map funds/balance into `available`/`used`/`total`
+  (all `non_negative_decimal`).
+- `get_bars(instrument, interval, days) -> list[Bar]` — return **real** OHLCV
+  history (see `zerodha.py`'s candle loop). Returning `[self.get_quote(...)]` is
+  the degenerate stub tracked by gap 0002 — do not copy it.
+- `cancel_order(order_id) -> Order` — parse the cancel response into the canonical
+  `Order`. Fabricating a zeroed `Order` is the stub tracked by gap 0003 — do not
+  copy it.
+
+## Step 3: Contract test with `MockTransport`
+
+Mirror `tests/test_dhan.py`: build a `MockTransport` with canned `200` responses
+shaped like the broker's real wire payload, then assert exact `Decimal` fields,
+enum mappings, and error paths.
+
+```python
+# tests/test_mybroker.py — shape
+from decimal import Decimal
+
+from vyapaar_adapters.common import MockTransport
+from vyapaar_adapters.mybroker import MyBrokerAdapter
+
+
+def _adapter(**responses):
+    return MyBrokerAdapter(transport=MockTransport(responses))
+
+
+def test_quote_translates_to_decimal():
+    adapter = _adapter({"GET https://api.mybroker.com/quotes": (200, {"ltp": "2456.70"})})
+    quote = adapter.get_quote("NSE:RELIANCE-EQ")
+    assert quote.last_price == Decimal("2456.70")   # exact, never float
+
+
+def test_missing_order_id_raises():
+    adapter = _adapter({"POST https://api.mybroker.com/orders": (200, {})})
+    # expect ValueError from place_order, BrokerApiError from HTTP >= 400
+```
+
+Assert in every test file:
+
+1. Each canonical field equals an exact `decimal.Decimal` (a bare number in the
+   canned payload still arrives as `Decimal` — `MockTransport`/`UrllibTransport`
+   decode with `parse_float=Decimal`).
+2. Enum round trips (`OrderSide`, `OrderType`, `ProductType`, `TimeInForce`).
+3. Error paths: missing order id raises `ValueError`; HTTP ≥ 400 raises
+   `BrokerApiError`.
+
+## Step 4: Register in two places (invariant)
+
+1. `pyproject.toml`:
+
+```toml
+[project.entry-points."vyapaar.adapters"]
+mybroker = "vyapaar_adapters.mybroker:MyBrokerAdapter"
+```
+
+2. `vyapaar_adapters/registry.py` — append to `BROKER_ADAPTERS`:
+
+```python
+"mybroker": MyBrokerAdapter,
+```
+
+`tests/test_registry.py` enforces that the entry-point group and
+`BROKER_ADAPTERS` stay in sync and that every adapter subclasses
+`BaseRestAdapter` and builds with `MockTransport` — the test fails if you update
+one side and not the other.
+
+## Step 5: Config template
+
+Add `configs/mybroker.toml` in the shape of `configs/dhan.toml` (`broker`,
+`paper`, `[credentials]`, `YOUR_*` placeholders only). Note: the TOML loader and
+the directory-driven template-parse test are pending (gap 0007); still add the
+template so it is covered when they land.
+
+## Step 6: Documentation
+
+- Add the wire mappings of your module to `docs/design/code-brokers.md` in the
+  adapter repo (endpoint paths, enum/product mappings, positions semantics).
+- If the broker has notable quirks (daily tokens, no sandbox, static-IP writes),
+  note them in [Brokers](../india/brokers.md).
+- Update the tables in [Adapters Package](../api/adapters-package.md).
+
+## Step 7: Verification gates
+
+```bash
+cd vyapaar-adapters
+make test     # pytest -q
+make lint     # ruff check .
+make check    # lint + format-check + tests
+mypy vyapaar_adapters tests   # strict-ish: disallow_untyped_defs
+```
+
+Everything runs offline — no live credentials, no network. Live smoke tests are
+not part of CI; the `scripts/smoke_adapters.py` runner only exercises
+`MockTransport`-backed construction of every registered adapter.
 
 ## Common Mistakes
 
-### Inventing your own price type
+### Parsing with `float`
 
-The canonical types use `float` for prices and quantities and unix-nanosecond
-integers for timestamps. Do not introduce `Decimal` or a wrapper type at the
-boundary: the domain validates these values on construction, and a mismatch
-fails the contract suite.
+The zero-floats invariant is enforced at three layers (`parse_float=Decimal`
+transport decode, `as_decimal` coercion, frozen self-validating models). A
+`float(...)` in your module is a review-blocking violation: prices, quantities,
+and balances must be `Decimal` end to end.
 
-### Blocking the event loop
+### Returning stubs from `get_bars` / `cancel_order`
 
-All I/O must be `async`. A synchronous HTTP call inside an `async`
-method blocks the entire engine.
+Copy the real implementations (`zerodha` candles, parsed cancel responses), not
+the stubs the shipped modules still carry (gaps 0002/0003). New modules are
+expected to land ahead of the parity plan, not reproduce its debt.
 
-### Forgetting to close connections
+### Registering only one side of the registry
 
-Every `connect()` needs a matching `disconnect()`. The engine calls
-`disconnect()` on shutdown, but a bug in `connect()` can leave a
-dangling WebSocket.
+Entry point without `BROKER_ADAPTERS` (or vice versa) breaks
+`tests/test_registry.py`. Update both.
 
-### Not handling broker-side rate limits
+### Leaking broker structures
 
-Indian brokers rate-limit aggressively. The token-bucket helper is shared
-plumbing owned by the core (`vyapaar.adapters` shared helpers, E1-S5), so it
-is not per-adapter code — do not reimplement it in your package.
+The module is the anti-corruption layer: broker-specific dicts stay inside the
+module. Anything crossing back into engine code is a canonical model.
 
-### Assuming the order ID is stable
+### Skipping the error paths
 
-Most brokers return a broker-assigned order ID that differs from your
-`client_order_id`. Preserve both. `client_order_id` is the caller's
-idempotency key: a repeat with the same id must not create a second order.
-
-### Raising on a rejected order
-
-A broker refusal is an `OrderReport` with `status=REJECTED` and a
-`reject_reason`, not an exception. Only `CapabilityError` (something the
-adapter does not declare) and `AdapterError` (unknown id, transport failure)
-are raised.
-
-### Testing only the happy path
-
-Most production bugs come from error paths — a rejected order, a
-disconnected WebSocket, a malformed response. Test these explicitly
-with fixtures.
+HTTP ≥ 400 (`BrokerApiError`), missing order ids (`ValueError`), unmapped enums
+(`KeyError`), and unknown instruments (`ValueError` from the splitter) are part of
+the contract — test them explicitly with `MockTransport` canned error payloads.
 
 ## Checklist
 
-Before opening a pull request:
-
-- [ ] Package skeleton created with uniform structure
-- [ ] `config.py` with Pydantic model and `SecretStr` for tokens
-- [ ] `http.py` with retry logic for transient failures
-- [ ] `websocket.py` with reconnection
-- [ ] `data.py` implementing `instruments`, `search_instruments`, `quote`,
-      `depth`, `historical_bars`, `subscribe`, `unsubscribe`
-- [ ] `execution.py` implementing `place_order`, `modify_order`,
-      `cancel_order`, `cancel_all`, `order_status`, `orders`, `trades`,
-      `positions`, `holdings`, `funds`, `margin`
-- [ ] Facade: `capabilities()`, `connect()`, `disconnect()`, `is_connected()`,
-      `session()`
-- [ ] `parsing.py` emitting the canonical field names (`float` prices,
-      unix-nanosecond timestamps)
-- [ ] Fixtures recorded for all message types
-- [ ] `await verify_adapter_contract(MyBrokerAdapter(config))` passes
-- [ ] Tests for parsing, data, execution, and error paths
-- [ ] Vyapaar-to-wire mappings built with `WireMap`, with `assert_covers`
-      checking every declared capability at import
-- [ ] `tests/fixtures/<name>/routes.toml` added so the root contract suite
-      discovers the adapter
-- [ ] Entry point declared under `[project.entry-points."vyapaar.adapters"]`
-- [ ] Added to CI workflow
-- [ ] README with installation, configuration, and example
-- [ ] All tests pass
-- [ ] `ruff check` and `mypy` pass
+- [ ] `vyapaar_adapters/<broker>.py` subclassing `BaseRestAdapter`, `default_base_url` set, `_headers()` auth added
+- [ ] All protocol methods implemented with canonical models and `as_decimal` coercion
+- [ ] Real `get_bars` (OHLCV) and parsed `cancel_order` — no stubs
+- [ ] `tests/test_<broker>.py` with `MockTransport`: Decimal assertions, enum mappings, error paths
+- [ ] Entry point in `pyproject.toml` **and** `BROKER_ADAPTERS` in `registry.py`
+- [ ] `configs/<broker>.toml` template with placeholders
+- [ ] Wire mappings documented in the adapter repo's `docs/design/code-brokers.md`
+- [ ] `make test`, `make lint`, `make check`, and `mypy` all green

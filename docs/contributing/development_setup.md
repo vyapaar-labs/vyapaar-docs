@@ -208,13 +208,14 @@ Broker adapters live in `vyapaar-adapters`, not in the core repository.
 If you are testing adapter code, clone that repository as a sibling:
 
     parent/
-    ├── vyapaar/
-    └── vyapaar-adapters/
+    ├── vyapaar-labs/
+    │   ├── vyapaar-adapters/
+    │   └── ...
 
-The adapter test suite uses recorded fixtures, so live broker
-credentials are not required. Adapters that need credentials (for the
-paper-trading integration tests) read them from environment variables
-and skip if not present.
+The adapter test suite is fully offline: canned `MockTransport` payloads and
+JSONL fixture replay — live broker credentials are never required, and nothing
+contacts a broker in CI. See
+[Adapters Package](../api/adapters-package.md#testing-verification).
 
 ## Common Development Tasks
 

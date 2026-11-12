@@ -1,173 +1,152 @@
 # Adapter Configuration
 
-How to configure the broker adapters in `vyapaar-adapters`: environment
-variables, paper and live modes, credentials, the cache directory, declared
-capabilities, certification and adding a broker. For broker-by-broker
-differences see [Brokers](brokers.md); for the contract itself see
-[Adapter Interface](../architecture/adapter_interface.md). The authoritative
-text is `vyapaar-adapters/README.md` and each adapter's own README.
+How the broker adapters in `vyapaar-adapters` are configured: constructor
+injection, the pydantic `AdapterConfig`/`BrokerCredentials` models, the Zone 3
+`configs/*.toml` templates, paper mode, and credential handling. For the package
+overview see [Adapters Package](../api/adapters-package.md); for broker-by-broker
+differences see [Brokers](brokers.md); for the Rust-side production adapters see
+[Adapter Interface](../architecture/adapter_interface.md).
+
+> Synced against `vyapaar-adapters` source on 2026-11-12.
 
 ## What is implemented
 
-| Package | Status |
-|---|---|
-| `vyapaar-dhan` | Implemented: execution, market data, streaming, contract-certified |
-| `vyapaar-zerodha` | Implemented: execution, market data, KiteTicker, contract-certified |
-| `vyapaar-angelone`, `vyapaar-fyers`, `vyapaar-upstox`, `vyapaar-kotak`, `vyapaar-iifl`, `vyapaar-motilal` | Scaffold placeholders only: uniform layout, empty `__init__.py`, no entry point, no implementation |
+All seven brokers live in **one package** (`vyapaar-adapters`, import name
+`vyapaar_adapters`) — there are no separate per-broker distributions:
 
-Only `dhan` and `zerodha` are registered through the `vyapaar.adapters` entry
-point. Naming a scaffold broker in a run config fails with `AdapterNotFound`
-listing the installed adapters; that is intended.
+| Broker | Module | Implemented | Contract-certified |
+|---|---|---|---|
+| Dhan | `vyapaar_adapters.dhan` | Yes (REST) | Yes (`tests/test_dhan.py`) |
+| Zerodha (Kite) | `vyapaar_adapters.zerodha` | Yes (REST, incl. real candle history) | Yes (`tests/test_zerodha.py`) |
+| Angel One | `vyapaar_adapters.angelone` | Yes (REST) | No (gap 0001) |
+| Upstox | `vyapaar_adapters.upstox` | Yes (REST) | No (gap 0001) |
+| Fyers | `vyapaar_adapters.fyers` | Yes (REST) | No (gap 0001) |
+| Kotak | `vyapaar_adapters.kotak` | Yes (REST) | No (gap 0001) |
+| IIFL | `vyapaar_adapters.iifl` | Yes (REST) | No (gap 0001) |
 
-## Environment variables
+"Certified" here means canned-payload contract tests against `MockTransport` exist
+for the wire→canonical translation (exact `Decimal` fields, enum mappings, error
+paths). The adapters are development/research-plane Python (see
+[Brokers](brokers.md#the-static-ip-requirement)); the Rust production path is
+`vyapaar-market`/`vyapaar-exec`.
 
-Credentials come from the environment, one prefix per adapter. `<PREFIX>MODE`
-is `live` (the default) or `paper`.
+## Constructor injection
 
-| Adapter | Variables |
-|---|---|
-| `dhan` (`DHAN_`) | `DHAN_CLIENT_ID`, `DHAN_ACCESS_TOKEN`, `DHAN_MODE` |
-| `zerodha` (`ZERODHA_`) | `ZERODHA_API_KEY`, `ZERODHA_ACCESS_TOKEN`, `ZERODHA_API_SECRET` (optional), `ZERODHA_USER_ID` (optional), `ZERODHA_MODE` |
-| both | `VYAPAAR_CACHE_DIR` (see below) |
-
-`DhanConfig.from_env()` and `ZerodhaConfig.from_env()` read those variables.
-Pass another prefix, for example `from_env(prefix="ALT_")`, to read `ALT_*`
-instead; that is how you run several accounts side by side. The Zerodha access
-token is a daily token, so it has to be refreshed each trading day. Credentials
-belong in the environment, not in config files.
-
-## Modes and credentials
-
-Credentials are **required** for live. A bare `DhanAdapter()` or
-`ZerodhaAdapter()` with no config and no credentials in the environment raises
-`AuthenticationError` naming the missing variables (`DHAN_CLIENT_ID` and
-`DHAN_ACCESS_TOKEN`, or `ZERODHA_API_KEY` and `ZERODHA_ACCESS_TOKEN`). It never
-falls back to paper silently.
-
-Ask for simulation explicitly, any of three ways:
+Adapters take everything explicitly — no implicit environment reads:
 
 ```python
-from vyapaar_dhan import DhanAdapter, DhanConfig
+from vyapaar_adapters.common import BrokerCredentials, MockTransport, UrllibTransport
+from vyapaar_adapters.dhan import DhanAdapter
 
-DhanAdapter(mode="paper")            # no credentials needed
-DhanAdapter(DhanConfig.paper())      # same, via the config
-# or set DHAN_MODE=paper in the environment and call DhanAdapter()
+dhan = DhanAdapter(
+    transport=UrllibTransport(timeout=15.0),   # default; MockTransport in tests
+    base_url=None,                             # optional override of the default
+    credentials=BrokerCredentials(
+        access_token="...",                    # from your secret store
+        client_id="...",
+    ),
+)
 ```
 
-Paper mode needs no credentials and uses an in-memory transport. The same
-applies to `ZerodhaAdapter` and `ZerodhaConfig.paper()`.
+Each adapter uses the credential fields it needs in its `_headers()`:
+Dhan sends `access-token` + `client-id`; Zerodha composes
+`Authorization: token <api_key>:<access_token>`; Angel One adds
+`X-ClientCode`/`X-ApiKey`; the Bearer-token brokers (Upstox, Kotak, IIFL) use
+`access_token` alone; Fyers sends the raw token as `Authorization`.
 
-!!! warning "Behaviour change"
-    Code that built `DhanAdapter()` or `ZerodhaAdapter()` bare and relied on
-    getting a paper adapter now raises `AuthenticationError`. Add
-    `mode="paper"`.
+## The pydantic config models
 
-A run config selects the adapter by name and the engine calls
-`resolve_adapter(name, **config)`:
+`vyapaar_adapters.common.config` defines the declarative shape:
+
+```python
+class BrokerCredentials(BaseModel):
+    api_key: str = ""          # broker API key / app key
+    access_token: str = ""     # OAuth access token (Zerodha/Upstox/Fyers/...)
+    client_id: str = ""        # broker client / user id
+    api_secret: str = ""       # API secret (Angel One / IIFL / Kotak)
+
+class AdapterConfig(BaseModel):
+    broker: str                # registry name: "dhan", "zerodha", "paper", ...
+    base_url: str | None = None
+    paper: bool = False
+    credentials: BrokerCredentials = BrokerCredentials()
+```
+
+## Zone 3 TOML templates
+
+`configs/` ships templates matching that shape:
+
+| Template | Broker | Paper | Status |
+|---|---|---|---|
+| `configs/paper.toml` | `paper` | `true` | present |
+| `configs/dhan.toml` | `dhan` | `false` | present |
+| `configs/zerodha.toml` | `zerodha` | `false` | present |
+| `angelone/upstox/fyers/kotak/iifl.toml` | — | — | missing (gap 0007) |
 
 ```toml
-[adapter]
-name = "dhan"
-mode = "paper"
-client_id = "${DHAN_CLIENT_ID}"
-access_token = "${DHAN_ACCESS_TOKEN}"
+# configs/zerodha.toml (copy to adapter.toml and fill)
+broker = "zerodha"
+paper = false
+# base_url = "https://api.kite.trade"
+
+[credentials]
+api_key = "YOUR_API_KEY"
+access_token = "YOUR_ACCESS_TOKEN"
+client_id = ""
 ```
 
-## Cache directory
+To use one, copy the template to `adapter.toml`, fill credentials, and construct
+`AdapterConfig` from it. Two pieces are still pending (gap 0007, plan 0003):
+an `AdapterConfig.from_toml(path)` loader, and a test asserting every template in
+`configs/` parses — until then the templates are reference documents, and
+credential assembly is code-side.
 
-Each adapter keeps its cache (for example the instrument master) under
-`$VYAPAAR_CACHE_DIR/<broker>`. When `VYAPAAR_CACHE_DIR` is unset the default is
-`~/.cache/vyapaar/<broker>`, so Dhan uses `~/.cache/vyapaar/dhan` and Zerodha uses
-`~/.cache/vyapaar/zerodha`.
+## Paper mode
 
-## Capabilities
+There are two paper paths:
 
-Each adapter declares exactly what it supports in `AdapterCapabilities`. An
-unsupported request raises `CapabilityError` **before** any network call.
+1. **Deterministic paper broker** — `vyapaar_adapters.paper.PaperBroker` fills
+   orders from a quote map with exact `Decimal` arithmetic (market fills at the
+   quote, limit fills on crossing). No credentials, no network. Combined with
+   `RecordingAdapter`/`ReplayingAdapter` it produces replayable JSONL fixtures, so
+   CI is fully deterministic. See
+   [Adapters Package](../api/adapters-package.md#paper-broker-fixture-replay-vyapaar_adapterspaper).
+2. **Broker REST in paper mode** — the `paper` field of `AdapterConfig` /
+   `configs/paper.toml` declares the intent; the wiring that routes a loaded config
+   into a `PaperBroker` is part of pending gap 0007.
 
-| Dimension | Dhan | Zerodha |
-|---|---|---|
-| Exchanges | NSE, BSE, MCX | NSE, BSE, NFO, BFO, MCX, CDS |
-| Products | delivery, intraday, carry | delivery, intraday, carry |
-| Order types | market, limit, stop_limit, stop_market | market, limit, stop_limit, stop_market |
-| Time in force | day, ioc | day, ioc |
-| Stream modes | ltp, quote, depth | ltp, quote, depth |
+The fill model is deliberately simple (single price, no depth/slippage); its
+realism upgrade is tracked as improvement gap 0006.
 
-Neither broker declares `trailing_stop`, `gtc`, `fok` or `gtd`.
-`OrderType.TRAILING_STOP` exists in the core (see
-[Position Management](../strategies/position_management.md)), but no adapter
-lists it, so a trailing-stop intent raises `CapabilityError` on both.
+## Credentials & secrets
 
-Vyapaar-to-wire mappings are `WireMap` objects (`DHAN_*_WIRE`, `ZERODHA_*_WIRE`
-in each package's `constants.py`): one dictionary per mapping, with the reverse
-derived and duplicate values rejected. `assert_covers` runs at import and fails
-if a declared product, order type or time in force has no wire mapping, so a
-gap shows up immediately instead of at order time.
+- Credentials come from your environment or a secrets manager and are injected
+  into `BrokerCredentials` — the repo never reads them implicitly and the
+  committed templates carry `YOUR_*` placeholders only.
+- `BrokerCredentials` fields are plain strings held on the adapter instance and
+  used only in request headers; do not log adapter `repr()`s.
+- Token lifetimes are broker-specific (Zerodha's access token is daily;
+  Dhan's can be long-lived) — see [Brokers](brokers.md#authentication-differences).
+- There is no TOTP/headless login flow yet (gap 0005): tokens must be obtained
+  outside Vyapaar today.
 
-### Dhan time in force
+## Registry resolution
 
-Dhan now sends the validity that matches the intent's time in force: `DAY`
-orders go as `"DAY"` and `IOC` orders as `"IOC"`. Earlier versions always sent
-`DAY`, so an IOC intent was silently placed as a day order. A time in force that
-is not mapped is rejected with `CapabilityError` before any network call.
+`AdapterConfig.broker` names resolve through
+`vyapaar_adapters.registry.load_adapters()` — the `vyapaar.adapters` entry-point
+group with a built-in `BROKER_ADAPTERS` fallback (kept in sync by
+`tests/test_registry.py`). Naming an unknown broker is a `KeyError` at dict access,
+not a silent fallback to paper.
 
-!!! warning "Not verified against live Dhan"
-    The `"IOC"` wire value is covered by the adapter's offline unit tests, not
-    by a recorded or live Dhan response. Treat it as unverified until it has
-    been confirmed against the live DhanHQ API, and do not rely on IOC
-    semantics with real money before then.
+## Verification
 
-## Certification
-
-An adapter is certified when its entry passes the shared contract suite:
-
-```sh
-python -m pytest tests/test_contract_suite.py -v
+```bash
+cd vyapaar-adapters
+make test    # pytest -q — offline, MockTransport only, no live credentials
+make lint    # ruff check .
+make check   # lint + format-check + tests
 ```
 
-The suite runs `vyapaar.adapters.contract.verify_adapter_contract` over every
-package that has `tests/fixtures/<name>/routes.toml`. Read endpoints are
-replayed from recorded broker responses in that directory; the stateful order
-lifecycle uses the adapter's in-memory mock handler. Packages without a
-`routes.toml`, which today means the six scaffold brokers, are discovered
-automatically and reported as skipped placeholders. The suite needs Python
-3.11 or newer (`tomllib`).
-
-`routes.toml` holds three importable `module:attr` hooks (`adapter`, `config`
-with a `.paper()` constructor, and `fallback`, the in-memory handler) and a
-`[routes]` table mapping a URL path fragment to a recorded file; the longest
-matching fragment wins.
-
-Dhan also has live, read-only smoke tests marked `live`. They skip unless the
-credentials are set, and a conftest guard refuses any request that is not a
-documented read endpoint. `scripts/smoke_test.py` defaults to paper and refuses
-live mode unless `VYAPAAR_LIVE_SMOKE_TEST=1` is set.
-
-## CI
-
-The adapters' CI builds `vyapaar` from source rather than installing it, because
-core is not on PyPI and needs its Rust extension built with maturin. The
-workflow checks out `vyapaar-labs/vyapaar` at the ref in `VYAPAAR_REF` (currently
-`main`), runs `maturin develop`, installs `shared`, `dhan` and `zerodha`
-editable, then runs ruff and the full pytest suite. If the core contract changes
-incompatibly, pin `VYAPAAR_REF` to a tag or SHA until the adapters catch up.
-
-## Adding a broker
-
-Start from `dhan/` as the template, then:
-
-1. Implement the facade and both roles in `<name>/src/vyapaar_<name>/`, declaring
-   exactly what the broker supports in `AdapterCapabilities`.
-2. Build the vyapaar-to-wire tables with `WireMap` and call `assert_covers(...)`
-   at import.
-3. Declare the entry point in `<name>/pyproject.toml` under
-   `[project.entry-points."vyapaar.adapters"]`.
-4. Record read responses under `tests/fixtures/<name>/` and add `routes.toml`
-   there. The contract suite picks the package up with no edit to
-   `tests/test_contract_suite.py`.
-5. Add the package to `pytest.ini`, the CI workflow's `pip install -e` line and
-   the install instructions.
-
-The full walkthrough is the mdBook chapter "Adding Broker Adapters"
-(`book/src/contributing/adding_adapters.md` in this repository) and
-`vyapaar-adapters/MIGRATION.md`.
+The suite never contacts a live broker; recorded-fixture replay
+(`tests/test_replay.py`) and canned `MockTransport` payloads cover the wire
+translations that exist today (gaps 0001–0003 track the rest).

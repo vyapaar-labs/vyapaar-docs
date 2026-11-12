@@ -1,5 +1,15 @@
 # Adapters: typed registry helpers
 
+> !!! warning "Not yet implemented in the `vyapaar` SDK"
+>     The `vyapaar` wheel (built from `vyapaar-ffi`) does **not** ship a
+>     `vyapaar.adapters` module today — `base.py`, `registry.py`, the role
+>     protocols and `verify_adapter_contract` described below are the *target*
+>     contract, not shipped code. The adapter layer that **is** implemented is
+>     the separate [`vyapaar-adapters` package](adapters-package.md) with its own
+>     entry-point registry (`vyapaar_adapters.registry.load_adapters`). This page
+>     is retained as the design reference for the planned SDK-side registry;
+>     when it lands, it will be re-synced against source.
+
 Adapters implement the contract in `vyapaar/python/src/vyapaar/adapters/base.py` and are found
 through the registry in `vyapaar/python/src/vyapaar/adapters/registry.py`. Adapter packages advertise
 themselves under the `vyapaar.adapters` entry-point group; discovery is lazy and explicit

@@ -65,7 +65,7 @@ Vyapaar is architected as modular Japanese-named subsystems, each fulfilling a s
 | **脳** | `vyapaar-agent` | Rust + Python | **AI Brain**: Quantitative research loop, closed decision validation, deterministic prompt & trade replay harness, and native MCP research server. |
 | **魂** | `vyapaar-ffi` | Rust (PyO3) | **Python Soul**: Native C-extension compiling the `vyapaar` PyPI package. Houses zero-copy memory bridges, PyArrow data transfers, and Tokio actor runtime lifecycle management in Python. |
 | **顔** | `vyapaar-ui` | Rust (Leptos CSR / WASM) | **User Face**: High-performance reactive web dashboard, visual Strategy Studio node canvas, interactive backtest analysis workbench, and openalgo-charts integration. |
-| **適** | `vyapaar-adapters` | Python | **User Adapters**: Python-first community broker adapters, alternative data feeds, and rapid prototyping plugins conforming to the core adapter interface. |
+| **適** | `vyapaar-adapters` | Python | **User Adapters**: Python-first broker ACL SDK — single package, 7 broker modules (Dhan, Zerodha contract-certified), deterministic paper broker + fixture replay. See [Adapters Package](../api/adapters-package.md). |
 | **例** | `vyapaar-examples` | Python | **Canonical Examples**: Production-ready reference strategies: NIFTY/BankNIFTY options selling, equity momentum, statistical arbitrage, and factor-based screening. |
 
 ---

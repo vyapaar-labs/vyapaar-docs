@@ -9,7 +9,7 @@ The Vyapaar Labs Python ecosystem provides high-productivity quantitative resear
 | Package | Repository | Description |
 | :--- | :--- | :--- |
 | `vyapaar_strategies` | [`vyapaar-strategies`](https://github.com/vyapaar-labs/vyapaar-strategies) | Quantitative strategy authoring SDK, indicator library (SMA, EMA, RSI, ATR, MACD), signal generation, portfolio sizing, and step chaining. |
-| `vyapaar_adapters` | [`vyapaar-adapters`](https://github.com/vyapaar-labs/vyapaar-adapters) | Broker execution and market data adapters for Zerodha Kite, Upstox, Angel One, and Fyers conforming to the hexagonal port interface. |
+| `vyapaar_adapters` | [`vyapaar-adapters`](https://github.com/vyapaar-labs/vyapaar-adapters) | Broker ACL SDK: one package, 7 broker modules (Dhan, Zerodha, Angel One, Upstox, Fyers, Kotak, IIFL), canonical `Decimal` models over injected REST transports, deterministic paper broker + JSONL fixture replay. See [Adapters Package](../adapters-package.md). |
 | `vyapaar_data` | [`vyapaar-data`](https://github.com/vyapaar-labs/vyapaar-data) | Historical Parquet lakehouse data catalogs, partition management, point-in-time universe resolvers, and tick storage. |
 | `vyapaar_examples` | [`vyapaar-examples`](https://github.com/vyapaar-labs/vyapaar-examples) | Production-ready reference strategies: NIFTY/BankNIFTY options selling, equity momentum, and statistical arbitrage. |
 | `vyapaar_ffi` | [`vyapaar-ffi`](https://github.com/vyapaar-labs/vyapaar-ffi) | PyO3 native C-extension providing zero-copy memory bridges, PyArrow record batch transfers, and Tokio actor runtime lifecycle management. |

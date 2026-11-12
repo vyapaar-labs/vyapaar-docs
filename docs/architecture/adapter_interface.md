@@ -180,7 +180,10 @@ Vyapaar maintains an intentional boundary between core institutional adapters an
 | Attribute | First-Party Rust Adapters (`vyapaar-exec`) | User Python Adapters (`vyapaar-adapters`) |
 | :--- | :--- | :--- |
 | **Language** | 100% Rust | 100% Python |
-| **Supported Brokers** | Zerodha Kite, Upstox, Angel One, Fyers | Nuvama, Finvasia, Alice Blue, custom brokers |
-| **Source Directory** | `vyapaar-exec/crates/vyapaar-exec-*` | `vyapaar-adapters/src/vyapaar/adapters/*` |
-| **Performance** | Sub-millisecond, zero-allocation serialization | Standard Python asyncio |
-| **Target Use Case** | Production institutional trading desks | Rapid prototyping, alternative brokers, community |
+| **Supported Brokers** | Zerodha Kite, Upstox, Angel One, Fyers | Dhan, Zerodha, Angel One, Upstox, Fyers, Kotak, IIFL |
+| **Source Directory** | `vyapaar-exec/crates/vyapaar-exec-*` | `vyapaar-adapters/vyapaar_adapters/*.py` |
+| **Performance** | Sub-millisecond, zero-allocation serialization | Standard-library synchronous REST (`UrllibTransport`) |
+| **Target Use Case** | Production institutional trading desks | Rapid prototyping, research, alternative brokers, community |
+
+The shipped Python layer is documented in
+[Adapters Package](../api/adapters-package.md).

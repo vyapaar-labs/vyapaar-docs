@@ -133,7 +133,8 @@ nav:
   - API Reference:
       - Python Ecosystem: api/python/index.md
       - Python SDK (Client): api/python-sdk.md
-      - Adapters (Typed Registry): api/adapters.md
+      - Adapters Package (vyapaar-adapters): api/adapters-package.md
+      - Adapters (Typed Registry, planned): api/adapters.md
       - REST API: api/rest.md
       - API Specification: api/api-reference.md
   - Governance & Migration:

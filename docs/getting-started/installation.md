@@ -73,20 +73,19 @@ Verify:
 
 ## Install Broker Adapters
 
-Adapters live in a separate repository so the core engine stays
-broker-agnostic. Install only the ones you need:
+Adapters live in a separate repository — one package, one module per broker —
+so the core engine stays broker-agnostic:
 
     git clone https://github.com/vyapaar-labs/vyapaar-adapters.git
     cd vyapaar-adapters
 
-    pip install -e ./shared
-    pip install -e ./dhan -e ./zerodha   # the two implemented adapters
+    pip install -e .          # installs vyapaar_adapters with all seven broker modules
 
-Only Dhan and Zerodha are implemented today; the other broker packages are
-scaffolds. Each implemented adapter has a paper mode that needs no credentials
-(`DhanAdapter(mode="paper")`), but you must ask for it: a bare `DhanAdapter()`
-without credentials raises `AuthenticationError`. You don't need live broker
-credentials to run backtests or paper strategies. See
+All seven brokers (Dhan, Zerodha, Angel One, Upstox, Fyers, Kotak, IIFL) ship in
+the single package; Dhan and Zerodha are the contract-certified ones. The
+deterministic paper broker (`PaperBroker`) needs no credentials and no network —
+you don't need live broker credentials to run offline tests. See
+[Adapters Package](../api/adapters-package.md) and
 [Adapter Configuration](../india/adapter_configuration.md).
 
 ## Configuration
