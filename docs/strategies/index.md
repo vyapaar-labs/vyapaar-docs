@@ -43,6 +43,28 @@ carry `status = "scaffold"` in their `config.toml`. Do not treat a scaffold as
 an implemented strategy. Every registered strategy also has a `step.toml`; see
 [Step Manifests and Chaining](step_manifests_and_chaining.md).
 
+## Versioned Strategy Manifests & Baskets (plan 0001)
+<a id="versioned-strategy-manifests-baskets-plan-0001"></a>
+
+`vyapaar-strategies` also ships **versioned strategy manifests** and **basket
+manifests** (plan 0001, all phases implemented in `207a70c`):
+
+| Piece | Description |
+|-------|-------------|
+| `StrategyManifest` | Versioned strategy sidecar: subscriptions, warm-up bars, capital allocation, instrument selection, and promotion status |
+| `BasketManifest` | Multi-strategy basket: member strategy refs, risk budget per member, and composite allocation |
+| `PromotionStatus` | Promotion workflow: `promote()` advances exactly one stage forward with evidence references; stages are `Draft → Review → Staged → Live → Archived` |
+
+Manifests and baskets live under `vyapaar_strategies/manifest/` (`strategy.py`,
+`basket.py`, `params.py`, `version.py`) and are validated against JSON schemas
+in `schema/` (`step.schema.json`, `strategy-manifest.schema.json`,
+`basket-manifest.schema.json`). The CLI validators
+`tools/validate_manifests.py` and `tools/validate_chain.py` keep each manifest
+in step with its `config.toml` and code.
+
+See [Step Manifests and Chaining](step_manifests_and_chaining.md) for the
+`step.toml` screen/filter/size/execute stage model and chain validator.
+
 !!! warning "sma_crossover defaults"
     `sma_crossover` has two sets of defaults. The code (`Parameter()`
     declarations) defaults to fast 10 and slow 30; its `config.toml` sets 20

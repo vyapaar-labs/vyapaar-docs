@@ -356,76 +356,99 @@ python options/04_backtest_iron_condor.py --underlying NIFTY --expiry 2024-12-26
 python options/05_expiry_day_strategy.py --underlying BANKNIFTY --expiry 2024-12-25
 ```
 
-## AI research — `ai_research/`
+## Stage 6 — StockSharp Port (`stocksharp/` + `options/06–08`)
 
-No trading strategy. 01, 03, 06 and 09 are runnable offline (a scripted fake
-LLM, no network, no API keys); the rest are design placeholders whose `vyapaar.ai`
-modules are still empty stubs. Slot 08 is intentionally unused; numbers are not
-reused or shifted.
+Stage 6 of the staged port covers **derivatives & StockSharp**: `examples/options/`
+scripts 06–08 plus `examples/stocksharp/` (5 scripts). These are direct ports of
+StockSharp samples (pairs trading, TWAP/VWAP slicers, Turtle breakout, market
+making, risk parity) and Indian options microstructure (straddle, iron condor,
+expiry-day scalping, large-quantity slicing).
+
+### `stocksharp/` — 5 scripts
+
+| # | File | Focus |
+|---|---|---|
+| 01 | `stocksharp/01_pairs_trading.py` | Statistical pairs trading — Engle-Granger cointegration, OLS hedge ratio, Dickey-Fuller stationarity gate, z-score ±2σ entry / 0 exit (ICICIBANK vs HDFCBANK) |
+| 02 | `stocksharp/02_twap_vwap.py` | Execution slicers — TWAP/VWAP intraday pacing, deterministic microsecond jitter, freeze-limit verification per child order (largest-remainder lot distribution) |
+| 03 | `stocksharp/03_turtle_breakout.py` | Turtle breakout — 20/55-day Donchian channel, 2N ATR trailing stop, up to 4-unit pyramiding |
+| 04 | `stocksharp/04_market_maker.py` | Avellaneda-Stoikov market making — reservation price, spread, inventory skew, order-book-imbalance filter |
+| 05 | `stocksharp/05_risk_parity.py` | Risk-parity rebalancer across 10 scrips via inverse-60-day-vol weights |
+
+### `options/06–08` — Options microstructure
+
+| # | File | Focus |
+|---|---|---|
+| 06 | `options/06_nifty_920_straddle.py` | Short ATM straddle @ 09:20 IST; 25% per-leg stop, 15:20 square-off, STT |
+| 07 | `options/07_large_qty_options_slicer.py` | Freeze-limit slicer: 5,000 contracts → slices ≤ freeze limit (1,800) |
+| 08 | `options/08_iron_condor_hedging.py` | Delta-hedged iron condor with Greek risk bounds |
+
+See [Options Microstructure](../india/options.md) for the NSE/NFO market rules
+behind these scripts (STT, ICCL, freeze limits, weekly/monthly expiry cycles).
+
+## Stage 7 — AI Research & Production (`ai_research/` + `production/`)
+
+Stage 7 covers the autonomous AI research loop and the paper→live production
+path. Scripts 01, 03, 06, 09, 10, 11, 12 are runnable offline (a scripted fake
+LLM, no network, no API keys); the rest are design placeholders. Slot 08 is
+intentionally unused; numbers are not reused or shifted.
+
+### `ai_research/` — 11 scripts
 
 | # | File | Status | Purpose |
 |---|---|---|---|
-| 01 | `ai_research/01_llm_research_analyst.py` | Runnable | NL question → validated screener filter |
-| 02 | `ai_research/02_autoresearch_loop.py` | Design only | Hypothesis → backtest → journal |
-| 03 | `ai_research/03_nl_screener.py` | Runnable | NL query → screener filter → historical backtest |
-| 04 | `ai_research/04_nl_to_strategy.py` | Design only | NL → strategy manifest → `verify_manifest` |
-| 05 | `ai_research/05_rl_training.py` | Design only | Gym environment + RL policy |
-| 06 | `ai_research/06_mcp_integration.py` | Runnable | Enumerate the static MCP tool schema |
-| 07 | `ai_research/07_natural_language_critique.py` | Design only | Backtest result → LLM critique |
-| 09 | `ai_research/09_typed_llm_decision.py` | Runnable | Typed `LlmDecision` (veto or size down) applied to an order intent; size increases are rejected; Journal v1 audit records |
+| 01 | `ai_research/01_llm_research_analyst.py` | Runnable | NL question → validated screener filter via `ScriptedFakeLlm` + `KnowledgePack` |
+| 02 | `ai_research/02_autoresearch_loop.py` | Design only | `ResearchLoop` → hypotheses → backtest → journal (Faiss + Parquet) |
+| 03 | `ai_research/03_nl_screener.py` | Runnable | NL query → strict screener filter → historical backtest |
+| 04 | `ai_research/04_nl_to_strategy.py` | Design only | NL description → strategy manifest → `verify_manifest` (parser/AST sandbox) |
+| 05 | `ai_research/05_rl_training.py` | Design only | Gym env + RL policy on synthetic prices |
+| 06 | `ai_research/06_mcp_integration.py` | Runnable | Enumerate the static MCP tool catalog (`schema/mcp/mcp_tools.json`) |
+| 07 | `ai_research/07_natural_language_critique.py` | Design only | `BacktestResult` → LLM critique → structured `Critique` report |
+| 09 | `ai_research/09_typed_llm_decision.py` | Runnable | Typed `LlmDecision` (veto / size-down) on order intent; schema rejects increases; fail-closed parsing; Journal v1 NDJSON audit records |
+| 10 | `ai_research/10_claude_autonomous_quant.py` | Runnable | MCP quant agent: inspect MCP schema + indicator catalog → mean-reversion hypothesis → backtest → DSR evaluation |
+| 11 | `ai_research/11_deterministic_ai_replay.py` | Runnable | Cryptographic prompt replayer: SHA-256 prompt cache + Journal v1 NDJSON, replay with no API calls |
+| 12 | `ai_research/12_ai_drawdown_refinement.py` | Runnable | AI auto-enhancer: diagnose ≥12% drawdown → ADX trend filter → decision_guard rules → OOS re-evaluation with DSR |
 
-Behaviour worth knowing:
-
-- `01` rejects an empty filter (`EmptyFilterError`) instead of treating "no
-  condition" as a valid screen. The scripted fake LLM only knows the default query;
-  for any other query pass `--fake-response`.
-- `03` is strict. `generate_python_predicate` raises on an empty filter, on a
-  clause it cannot match and on a metric outside `KNOWN_METRICS`; a known metric
-  missing from a row makes the predicate false. The predicate runs through
-  `safe_eval_predicate`, a whitelist AST walk (comparisons, `and`/`or`/`not`,
-  arithmetic, numeric constants and known names; no calls, attributes,
-  subscripts, lambdas or strings). The as-of date comes only from date phrasing
-  (an ISO date, "in 2020", "as of 2020", "N years ago"), so "volume > 2020" is a
-  volume. Rows are ordered by as-of market cap before `--limit`, never by the
-  forward return.
+Key behaviours:
 - `09` fails closed through `vyapaar_examples/decision_guard.py`: a missing or
-  malformed decision or quantity rejects the order instead of approving it, a
-  quantity increase raises, and a veto or size-down of a protective exit is
-  ignored and flagged.
+  malformed decision rejects the order; a quantity increase raises; a veto or
+  size-down of a protective exit is ignored and flagged.
+- `11` replays prompts cryptographically (SHA-256) with no API calls —
+  deterministic AI replay.
 
-```bash
-python ai_research/01_llm_research_analyst.py
-python ai_research/01_llm_research_analyst.py --query "rsi below 30" --fake-response "rsi < 30"
-python ai_research/03_nl_screener.py --query "close above 50-day moving average in 2021"
-python ai_research/06_mcp_integration.py
-```
-
-## Production — `production/`
+### `production/` — 6 scripts
 
 All run the `sma_crossover` strategy offline. `01` and `03` mark open positions
-to market on every bar, so the equity curve includes unrealised P&L. `01` echoes
-its risk-limit arguments but does not enforce them, `02` is a Dhan template whose
-live session code is commented out, and `04`'s metrics are simulated. None of
-these is a deployable trader; see [Known Issues](known_issues.md).
+to market on every bar, so the equity curve includes unrealised P&L.
 
 | # | File | Strategy |
 |---|---|---|
 | 01 | `production/01_paper_trading.py` | Inline `SmaPaper` — simulated fills, P&L, risk guards |
-| 02 | `production/02_live_trading_dhan.py` | Inline `SmaLive` — Dhan connect, orders, position sync |
+| 02 | `production/02_live_trading_dhan.py` | Inline `SmaLive` — Dhan connect, orders, position sync (dry-run echo; live code commented out) |
 | 03 | `production/03_multi_account.py` | Inline `SmaMulti` — isolated capital, aggregated P&L |
 | 04 | `production/04_monitoring.py` | No strategy — health checks |
-| 05 | `production/05_deployment.py` | No strategy — deployment config |
+| 05 | `production/05_deployment.py` | No strategy — deployment config (systemd + Dockerfile template) |
+| 06 | `production/06_multi_broker_dispatch.py` | Same SMA strategy dispatched across Zerodha, Angel One (paper), Upstox (scaffold) — adapter-agnostic parity |
 
-```bash
-python production/01_paper_trading.py --strategy sma_crossover --capital 100000
-python production/02_live_trading_dhan.py --client-id XXX --access-token YYY  # dry-run echo; --no-dry-run returns status "template"
-python production/03_multi_account.py --accounts config/accounts.yaml
-python production/04_monitoring.py --port 9090
-python production/05_deployment.py --output /etc/vyapaar/
-```
+None of these is a deployable trader; see [Known Issues](known_issues.md).
 
-`05` writes a systemd unit and a Dockerfile that run `python -m vyapaar.session.run`,
-which does not exist in the `vyapaar` package; treat them as a template.
+## Stage 8 — Docs, Index, Suite Sweep
+
+Stage 8 is documentation and the master index:
+
+- **Master index** at `examples/README.md` — comprehensive index of all 15 flat
+  scripts + 13 topic directories
+- **13 topic READMEs** — one per topic directory (`basic`, `candles`, `storage`,
+  `universes`, `strategies`, `backtesting`, `optimizer`, `screening`,
+  `mutual_funds`, `options`, `stocksharp`, `ai_research`, `production`)
+- **Concept docs ported to `docs/reference/`**: `options_microstructure.md`,
+  `roadmap-chaining.md`, `refactor-plan.md` (+ existing `dsr_pbo.md`,
+  `multibagger_screening_research.md`, `wfo_efficiency.md`)
+- **Full test suite parity**: 137 test modules (103 unit, 5 integration,
+  2 snapshot goldens); `test_pitfalls_sections.py` enforces `Pitfalls::`
+  docstring sections across all 94 topic scripts + 15 flat scripts;
+  `test_polyrepo_decoupling.py` verifies zero `honba` identifiers
+- All verification gates green: `pytest -q` (922 passed, 70 skipped),
+  `ruff check`, `ruff format --check`, `mypy vyapaar_examples` (234 files)
 
 For the strategy catalog itself, see the `vyapaar-strategies` repository; the
 [BANKNIFTY Options Backtest](../tutorials/banknifty-options-backtest.md),

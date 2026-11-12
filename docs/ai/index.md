@@ -17,7 +17,9 @@ most likely to be misunderstood.
   plain English, having Vyapaar implement it, and getting a
   plain-English critique.
 - **[Free-Tier LLM Backend (OmniRoute)](omniroute_setup.md)** — running
-  the local free-tier router that powers `vyapaar-agent-llm`.
+  the local free-tier router that powers `vyapaar-agent-llm` (plan 0004,
+  `FreeTierPolicy` Off/Warn/Enforce, `VYAPAAR_LLM_BASE_URL` /
+  `VYAPAAR_LLM_MODEL` / `VYAPAAR_LLM_API_KEY` wiring).
 - **[Fincept vs. Quantcept](fincept-vs-quantcept.md)** — which external
   product grounded which design decision.
 
@@ -54,6 +56,28 @@ The AI layer accelerates research. It does not replace it.
 - It is not a strategy generator on demand.
 - It is not a replacement for the validation suite.
 - It does not have access to broker credentials or live trading.
+
+## Agent Capabilities (Current State)
+
+`vyapaar-agent` (Tier 3A) ships the following capabilities, all behind the
+NoFX untrusted-AI principle (LLMs propose; `vyapaar-risk` gates):
+
+| Capability | Crate | Description |
+|------------|-------|-------------|
+| Closed decision grammar | `vyapaar-agent-core` | `DecisionParser` parses LLM output into `vyapaar_core::Decision` (`#[serde(deny_unknown_fields)]`), validates SEBI `algo_id`, price bands, price collars |
+| Trader loop | `vyapaar-agent-trader-loop` | Event-driven loop: build prompt → `LlmProvider` → parse → validate → `RiskEngine` gate |
+| LLM providers | `vyapaar-agent-llm` | Anthropic, OpenAI, Gemini, Ollama/vLLM, `ScriptedFakeLlm`, `OpenAiCompatibleProvider` (OmniRoute free-tier) |
+| Deterministic replay | `vyapaar-agent-replay` | SHA-256 prompt/completion cassette archive for byte-for-byte backtest replay |
+| MCP server | `vyapaar-agent-mcp` | 7 quantitative tools (`get_indicator_catalog`, `check_spec`, `run_backtest`, `evaluate_metrics`, `optimize_strategy`, `explain_decision`, `forecast`) |
+| Analytics engines | `vyapaar-agent-analytics` | DSR, PBO, walk-forward, regime classification, cointegration, cost stress, Monte Carlo, tearsheet |
+| Genetic synthesizer | `vyapaar-agent-genetic` | StockSharp Odysseus-style genetic programming & rule-tree strategy synthesizer |
+| Forecasting | `vyapaar-agent-forecast` | ARIMA, ETS, TBATS, Theta, gradient boost |
+| Panel econometrics | `vyapaar-agent-panel` | Fama-MacBeth, fixed effects, GMM, asset pricing |
+| Reports | `vyapaar-agent-report` | Typst/Markdown quantitative tearsheet & PDF report generator |
+| Conversational assistant | `vyapaar-agent-chat` | Turn state machine, `ToolRisk` levels (ReadOnly/LocalWrite/External/Execute), headless CLI runner |
+
+See [OmniRoute setup](omniroute_setup.md) for the free-tier LLM backend
+configuration.
 
 The AI layer's scope is research. Acting on research remains a human
 decision.

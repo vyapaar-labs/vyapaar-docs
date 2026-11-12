@@ -24,6 +24,24 @@ market rules that can be tested without a full engine.
 - **[Brokers](brokers.md)** — practical differences between the supported
   broker adapters.
 
+## India Data Lakehouse (`vyapaar-data`)
+
+`vyapaar-data` (Tier 6, Python + DuckDB) is the **financial lakehouse** for
+Indian markets. Implemented capabilities (gaps 0001–0003 closed):
+
+| Capability | Module | Status |
+|------------|--------|--------|
+| Economic calendar ingestion | `vyapaar_data.service.macro_reader` | ✅ Closed (macro series behind `PythonMacroReader`) |
+| Filings ingestion | `vyapaar_data.service.filings` | ✅ Closed (`FilingsReader` / `LakehouseFilingsReader`) |
+| Symbol profile / company fundamentals | `vyapaar_data.service.profile` | ✅ Closed (`LakehouseProfileReader`) |
+| Parquet catalog coverage | `vyapaar_data.store.parquet` | ✅ Closed |
+| Calendar data (earnings, dividends, splits, IPOs) | `vyapaar_data.store.calendar` | Stubbed pending vendor decision |
+
+These feed the `/market-data/calendar` and `/market-data/symbol-profile/{id}`
+REST endpoints in `vyapaar-runtime-api-rest` (Plan 0003 Phase 3 — currently
+serving illustrative sample data pending the `vyapaar-data` → Rust FFI bridge).
+
+
 ## The Two Facts That Change Everything
 
 Most strategies that fail in Indian markets fail because of one of

@@ -14,25 +14,24 @@ the broker's own documentation before relying on any detail below.*
 ## Adapter Status
 
 Two adapters are implemented and contract-certified: **Dhan** and **Zerodha**.
-Angel One, Fyers, Upstox, Kotak, IIFL and Motilal Oswal exist as package
-scaffolds with the uniform layout only: no implementation, no entry point,
-and naming one in a run config fails with `AdapterNotFound`. The table below
-describes the brokers' own APIs so you can plan; it does not mean Vyapaar can
-trade through the scaffolded ones yet. Status and setup are in
-[Adapter Configuration](adapter_configuration.md).
+Angel One, Fyers, Upstox, Kotak, and IIFL exist as package scaffolds with the
+uniform layout only: no implementation, no entry point, and naming one in a run
+config fails with `AdapterNotFound`. The table below describes the brokers' own
+APIs so you can plan; it does not mean Vyapaar can trade through the scaffolded
+ones yet. Status and setup are in [Adapter Configuration](adapter_configuration.md).
 
 | Broker | Vyapaar adapter |
-|---|---|
+|--------|-----------------|
 | Zerodha | Implemented |
 | Dhan | Implemented |
-| Angel One, Fyers, Upstox, Kotak, IIFL, Motilal Oswal | Scaffold only |
+| Angel One, Fyers, Upstox, Kotak, IIFL | Scaffold only |
 
 ## The Primary Brokers
 
 The brokers most commonly used by algorithmic traders in India:
 
 | Broker | API | Auth | Sandbox | Market data |
-|---|---|---|---|---|
+|--------|-----|------|---------|-------------|
 | Zerodha | Kite Connect | OAuth (daily) | No | Paid (₹500/mo) |
 | Dhan | DhanHQ | Token | **Yes** | Paid |
 | Angel One | SmartAPI | TOTP + API key | No | Included |

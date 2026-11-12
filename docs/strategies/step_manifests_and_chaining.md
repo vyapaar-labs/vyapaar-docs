@@ -172,6 +172,24 @@ python screening/06_run_chain.py --describe        # every step's manifest as JS
 The validator is found through `$VYAPAAR_STRATEGIES_DIR` or the sibling
 `vyapaar-strategies` checkout.
 
+## Versioned Manifests & Baskets
+
+Beyond per-strategy `step.toml` files, `vyapaar-strategies` ships
+**versioned strategy manifests** (`StrategyManifest`) and **basket manifests**
+(`BasketManifest`) — plan 0001, all phases implemented:
+
+| Manifest | Purpose |
+|----------|---------|
+| `StrategyManifest` | Versioned strategy sidecar: subscriptions, warm-up bars, capital allocation, instrument selection, promotion status |
+| `BasketManifest` | Multi-strategy basket: member strategy refs, risk budget per member, composite allocation |
+| `PromotionStatus` | Promotion lifecycle: `Draft → Review → Staged → Live → Archived`; `promote()` advances exactly one stage forward with evidence references |
+
+They live under `vyapaar_strategies/manifest/` and are validated against JSON
+schemas in `schema/`. CLI validators `tools/validate_manifests.py` and
+`tools/validate_chain.py` keep each manifest in step with its `config.toml`
+and code. See the [Strategies index](index.md#versioned-strategy-manifests-baskets-plan-0001)
+for details.
+
 ## Known caveats
 
 - `sma_crossover`: the `Parameter()` defaults in `strategy.py` are fast 10 and

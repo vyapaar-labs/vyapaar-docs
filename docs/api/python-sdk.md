@@ -3,9 +3,6 @@
 Typed access to the [REST read API](rest.md). The same `Client` methods work
 over HTTP (against `vyapaar serve`) and in process (no server).
 
-Two interchangeable transports back it: `HttpTransport` (a running `vyapaar serve`) and
-`InprocTransport` (the same Rust router driven in process, no server).
-
 ```python
 from vyapaar.client import Client, NotFoundApiError
 
@@ -27,28 +24,58 @@ except NotFoundApiError as err:
 ## `Client`
 
 | Method | Route | Returns |
-|---|---|---|
+|--------|-------|---------|
 | `health()` | `GET /health` | `Health` |
+| `capabilities()` | `GET /capabilities` | `CapabilityManifest` |
+| `schema()` | `GET /schema` | `dict` (the schema info record) |
 | `instruments(*, exchange=None, symbol=None)` | `GET /instruments` | `list[InstrumentInfo]` |
 | `instrument(instrument_id)` | `GET /instruments/{id}` | `InstrumentInfo` |
 | `bars(instrument_id, *, tf=None, from_=None, to=None)` | `GET /bars/{id}` | `list[Bar]` |
 | `quotes(symbols, *, venue=None, as_of=None)` | `GET /quotes` | `list[QuoteTick]` |
 | `depth(instrument_id, *, levels=None)` | `GET /depth/{id}` | `Depth` |
+| `symbol_profile(instrument_id)` | `GET /market-data/symbol-profile/{id}` | `SymbolProfile` (Plan 0003 Phase 3) |
+| `market_calendar(*, from_=None, to=None, category=None)` | `GET /market-data/calendar` | `list[CalendarEvent]` (Plan 0003 Phase 3) |
+| `screener_scan(universe, filters=None, *, tf=None, as_of=None)` | `GET /screener/scan` | `list[ScreenerResultRow]` |
 | `verify_strategy(manifest)` | `POST /strategies/verify` | `dict` (the IR) |
 | `strategies()` | `GET /strategies` | `list[CompiledStrategy]` |
 | `compile_strategy(manifest)` | `POST /strategies` | `CompiledStrategy` |
-| `screener_scan(universe, filters=None, *, tf=None, as_of=None)` | `GET /screener/scan` | `list[ScreenerResultRow]` |
-| `capabilities()` | `GET /capabilities` | `CapabilityManifest` |
-| `schema()` | `GET /schema` | `dict` (the schema info record) |
+| `trade_journal_accounts()` | `GET /trade-journal/accounts` | `list[JournalAccount]` (Plan 0003 Phase 1) |
+| `trade_journal_create_account(name, provenance)` | `POST /trade-journal/accounts` | `JournalAccount` (Plan 0003 Phase 1) |
+| `trade_journal_overview()` | `GET /trade-journal/overview` | `TradeJournalOverview` (Plan 0003 Phase 1) |
+| `trade_journal_trades(*, from_=None, to=None, limit=None, cursor=None)` | `GET /trade-journal/trades` | `list[ClosedTrade]` (Plan 0003 Phase 1) |
+| `trade_journal_annotate(trade_id, *, tags=None, rating=None, review=None, planned_risk=None)` | `PATCH /trade-journal/trades/{id}` | `TradeAnnotation` (Plan 0003 Phase 1) |
+| `trade_journal_calendar(*, month=None)` | `GET /trade-journal/calendar` | `PnlCalendar` (Plan 0003 Phase 2) |
+| `trade_journal_notes(*, account=None, limit=None)` | `GET /trade-journal/notes` | `list[JournalNote]` (Plan 0003 Phase 2) |
+| `trade_journal_create_note(account_id, day, note)` | `POST /trade-journal/notes` | `JournalNote` (Plan 0003 Phase 2) |
+| `trade_journal_compare(*, account_a=None, account_b=None, account=None, mode=None)` | `GET /trade-journal/compare` | `AccountComparison` (Plan 0003 Phase 2) |
+| `backtest_create(manifest)` | `POST /backtests` | `dict` (run_id) |
+| `backtest_get(run_id)` | `GET /backtests/{id}` | `dict` |
+| `backtest_journal(run_id)` | `GET /backtests/{id}/journal` | `dict` |
+| `sweep_create(manifest)` | `POST /sweeps` | `dict` (sweep_id) |
+| `sweep_get(sweep_id)` | `GET /sweeps/{id}` | `dict` |
+| `orders_place(order_request)` | `POST /orders` | `dict` (risk-gated) |
+| `orders_list()` | `GET /orders` | `list[Order]` |
+| `orders_cancel(order_id)` | `DELETE /orders/{id}` | `dict` |
+| `positions_list()` | `GET /positions` | `list[Position]` |
+| `portfolio_get()` | `GET /portfolio` | `Portfolio` |
+| `trading_state_get()` | `GET /trading-state` | `TradingState` |
+| `trading_state_put(state)` | `PUT /trading-state` | `dict` |
 
-Only these routes have methods. Every other route (backtests, sweeps, orders, positions,
-journals) answers 501 and has no client method. `instrument_id` is `SYMBOL.EXCHANGE` (a string or an `InstrumentId`).
+Only these routes have methods. Every other route answers 501 and has no client method.
+`instrument_id` is `SYMBOL.EXCHANGE` (a string or an `InstrumentId`).
 `tf` is `<n><s|m|h|d|w|mo>`, default `1m` on the server. `levels` is 1..=50.
 `Client` is a context manager; `close()` releases the transport.
 
-Models (`vyapaar.client.models`, ignore unknown fields so a newer server still parses):
-`Health`, `InstrumentInfo`, `Depth`/`DepthLevel`, `CompiledStrategy`, `ScreenerResultRow` and
-`CapabilityManifest`. `Bar` and `QuoteTick` are the existing `vyapaar.wire.wire` types.
+## Models (`vyapaar.client.models`)
+
+Ignore unknown fields so a newer server still parses:
+
+`Health`, `InstrumentInfo`, `Depth`/`DepthLevel`, `CompiledStrategy`, `ScreenerResultRow`,
+`CapabilityManifest`, `SymbolProfile`, `CalendarEvent`, `JournalAccount`,
+`TradeJournalOverview`, `ClosedTrade`, `TradeAnnotation`, `PnlCalendar`, `JournalNote`,
+`AccountComparison`, `Portfolio`, `Position`, `Order`, `TradingState`.
+
+`Bar` and `QuoteTick` are the existing `vyapaar.wire.wire` types.
 
 `CompiledStrategy` has `id` (string, `sha256:<hex>`) and `ir` (dict, the verified IR).
 
@@ -57,10 +84,11 @@ Constructors: `Client.http(base_url, **options)` (options go to `HttpTransport`)
 
 ## Capabilities and schema
 
-`capabilities()` returns a `CapabilityManifest`: `crates`, `market_packs`, `endpoints` (every
-route as `METHOD /path`), `not_implemented` (the subset that answers 501), `toolsets`, `adapters`
-and `features` (a `dict[str, bool]`). Read it instead of probing for 501s. `schema()` returns
-the served schema info as a plain dict (currently the OpenAPI version and the API version).
+`capabilities()` returns a `CapabilityManifest`: `crates`, `market_packs`, `endpoints`
+(every route as `METHOD /path`), `not_implemented` (the subset that answers 501),
+`toolsets`, `adapters` and `features` (a `dict[str, bool]`). Read it instead of
+probing for 501s. `schema()` returns the served schema info as a plain dict
+(currently the OpenAPI version and the API version).
 
 ```python
 api = Client.inproc("./bars")
@@ -88,6 +116,49 @@ for row in rows:
     print(row.instrument_id, row.metrics)
 ```
 
+## Trade-Performance Journal (Plan 0003)
+
+The trade-performance journal is **distinct** from `/portfolio/accounts` and from the run/backtest
+journals (`/backtests/{id}/journal`). It is backed by `vyapaar-ledger-performance`.
+
+```python
+api = Client.inproc("./bars")
+
+# List journal accounts
+accounts = api.trade_journal_accounts()
+for acct in accounts:
+    print(acct.id, acct.name, acct.provenance)
+
+# Create a journal account
+acct = api.trade_journal_create_account("My Journal", "Manual")
+
+# Overview: performance metrics + edge score
+overview = api.trade_journal_overview()
+print(overview.metrics.win_rate, overview.edge_score.score)
+
+# Closed trades (cursor-paginated)
+trades = api.trade_journal_trades(limit=50)
+for t in trades:
+    print(t.symbol, t.realized_pnl, t.tags)
+
+# Annotate a trade
+api.trade_journal_annotate(trade_id, tags=["earnings"], rating=4, review="Good setup")
+
+# Daily P&L calendar
+cal = api.trade_journal_calendar(month="2026-11")
+for day in cal.weeks:
+    for d in day.days:
+        print(d.date, d.net_pnl)
+
+# Day-keyed notes
+notes = api.trade_journal_notes(account=acct.id)
+api.trade_journal_create_note(acct.id, "2026-11-06", "Ran the opening-range breakout")
+
+# Account comparison
+comp = api.trade_journal_compare(account_a="acct_a", account_b="acct_b")
+print(comp.account_a.net_pnl, comp.account_b.net_pnl)
+```
+
 ## Strategy compilation
 
 Use `compile_strategy(manifest)` to compile and store a strategy manifest in the server's
@@ -101,13 +172,11 @@ manifest (`code` or `source` keys) is rejected with `reason = "source_unsupporte
 ```python
 api = Client.inproc("./bars")
 
-# Compile a manifest
 manifest = {...}  # strategy manifest as a dict
 compiled = api.compile_strategy(manifest)
 print(compiled.id)   # sha256:...
 print(compiled.ir)   # {"warmup_bars": 20, "universe": {...}, ...}
 
-# List all compiled strategies
 all_strategies = api.strategies()
 ```
 
@@ -148,7 +217,7 @@ subclass chosen by the envelope `code`. Attributes: `code`, `message`,
 `context`, `category`, `api_version`.
 
 | Class | Codes |
-|---|---|
+|-------|-------|
 | `ValidationApiError` | `validation_invalid_request` (422; includes `too_many_rows`) |
 | `NotFoundApiError` | `not_found`, `instrument_not_found`, `order_not_found` |
 | `AuthApiError` | `unauthorized`, `forbidden` |
