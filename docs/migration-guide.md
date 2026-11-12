@@ -1,8 +1,8 @@
 # `vyapaar-docs` — Subagent Migration & DDD Refactoring Guide
 
 > **Tier**: Tier 6E
-> **Source**: `/home/pmallapp/Devel/Finance/honba-workspace/honba-docs`
-> **Target**: `/home/pmallapp/Devel/Finance/vyapaar-labs/vyapaar-docs`
+> **Source**: `honba-workspace/honba-docs`
+> **Target**: `vyapaar-docs`
 
 ---
 
@@ -103,7 +103,7 @@ Execute automated and manual refactoring across all markdown files in `docs/`:
 
 ## 3. Strict Verification Commands
 ```bash
-cd /home/pmallapp/Devel/Finance/vyapaar-labs/vyapaar-docs
+# Run from the repository root
 source .venv/bin/activate
 mkdocs build --strict
 ```
